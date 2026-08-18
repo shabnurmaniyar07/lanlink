@@ -6,9 +6,19 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from .files import FileAccessError, copy_or_move, destination_for_upload, get_file, list_folder
-from .models import CopyMoveRequest, PairRequest
-from .state import HubState, PairedDevice
+from .files import (
+    FileAccessError,
+    copy_or_move,
+    create_folder,
+    delete_entry,
+    destination_for_upload,
+    get_file,
+    list_folder,
+    properties,
+    rename_entry,
+)
+from .models import CopyMoveRequest, CreateFolderRequest, PairRequest, RenameRequest
+from .state import PERM_DELETE, PERM_READ, PERM_WRITE, HubState, PairedDevice
 
 UPLOAD_CHUNK = 1024 * 1024
 
@@ -42,10 +52,19 @@ def create_app(state: HubState) -> FastAPI:
     def file_error(error: FileAccessError) -> HTTPException:
         return HTTPException(status_code=404, detail=str(error))
 
-    def writable(share_id: str) -> None:
+    denial = {
+        PERM_READ: "This shared folder is not readable.",
+        PERM_WRITE: "This shared folder is read-only.",
+        PERM_DELETE: "Deleting is not permitted in this shared folder.",
+    }
+
+    def require(share_id: str, flag: str) -> None:
         share = state.get_share(share_id)
-        if share and "w" not in share.permissions:
-            raise HTTPException(status_code=403, detail="This shared folder is read-only.")
+        if share and not share.allows(flag):
+            raise HTTPException(status_code=403, detail=denial[flag])
+
+    def writable(share_id: str) -> None:
+        require(share_id, PERM_WRITE)
 
     @app.get("/health")
     def health() -> dict:
@@ -143,11 +162,107 @@ def create_app(state: HubState) -> FastAPI:
             await file.close()
         return {"path": target.name, "bytes": target.stat().st_size}
 
+    @app.put("/v1/files/{share_id}")
+    async def stream_upload(
+        share_id: str,
+        request: Request,
+        path: str = Query(default=""),
+        name: str = Query(...),
+        caller: PairedDevice = Depends(require_pairing),
+    ) -> dict:
+        """Raw streaming upload. Used by hub-mediated node-to-node transfers.
+
+        Unlike the multipart endpoint this never buffers a whole file, so a relay
+        can pipe a remote download straight into a remote upload.
+        """
+        writable(share_id)
+        try:
+            target = destination_for_upload(state, share_id, path, name)
+        except FileAccessError as error:
+            raise file_error(error) from error
+
+        limit = state.max_upload_bytes
+        written = 0
+        created = False
+        try:
+            with target.open("xb") as output:
+                created = True
+                async for block in request.stream():
+                    if not block:
+                        continue
+                    written += len(block)
+                    if limit and written > limit:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"This file is larger than the {limit} byte upload limit.",
+                        )
+                    output.write(block)
+        except FileExistsError as error:
+            raise HTTPException(
+                status_code=409, detail="A file with this name already exists."
+            ) from error
+        except BaseException:
+            if created:
+                _discard(target)
+            raise
+        return {"path": target.name, "bytes": target.stat().st_size}
+
+    @app.post("/v1/shares/{share_id}/folders")
+    def make_folder(
+        share_id: str,
+        request: CreateFolderRequest,
+        caller: PairedDevice = Depends(require_pairing),
+    ) -> dict:
+        writable(share_id)
+        try:
+            created = create_folder(state, share_id, request.path, request.name)
+        except FileAccessError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return {"result": "ok", "name": created.name}
+
+    @app.post("/v1/shares/{share_id}/rename")
+    def rename(
+        share_id: str,
+        request: RenameRequest,
+        caller: PairedDevice = Depends(require_pairing),
+    ) -> dict:
+        writable(share_id)
+        try:
+            renamed = rename_entry(state, share_id, request.path, request.new_name)
+        except FileAccessError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return {"result": "ok", "name": renamed.name}
+
+    @app.delete("/v1/shares/{share_id}/entries")
+    def delete(
+        share_id: str,
+        path: str = Query(...),
+        recursive: bool = Query(default=False),
+        caller: PairedDevice = Depends(require_pairing),
+    ) -> dict:
+        require(share_id, PERM_DELETE)
+        try:
+            kind = delete_entry(state, share_id, path, recursive=recursive)
+        except FileAccessError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return {"result": "ok", "kind": kind}
+
+    @app.get("/v1/shares/{share_id}/properties")
+    def entry_properties(
+        share_id: str,
+        path: str = Query(default=""),
+        caller: PairedDevice = Depends(require_pairing),
+    ) -> dict:
+        try:
+            return properties(state, share_id, path)
+        except FileAccessError as error:
+            raise file_error(error) from error
+
     @app.post("/v1/operations")
     def operation(request: CopyMoveRequest, caller: PairedDevice = Depends(require_pairing)) -> dict:
         writable(request.destination_share_id)
         if request.operation == "move":
-            writable(request.source_share_id)
+            require(request.source_share_id, PERM_DELETE)
         try:
             result = copy_or_move(state, **request.model_dump())
         except FileAccessError as error:

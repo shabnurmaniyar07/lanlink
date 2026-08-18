@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -120,6 +121,91 @@ def destination_for_upload(state: HubState, share_id: str, folder_path: str, fil
     if not folder.is_dir():
         raise FileAccessError("Destination folder not found.")
     return folder / safe_name
+
+
+def _require_share(state: HubState, share_id: str) -> Share:
+    share = state.get_share(share_id)
+    if not share:
+        raise FileAccessError("Unknown share.")
+    return share
+
+
+def resolve_entry(state: HubState, share_id: str, relative_path: str) -> Path:
+    """Resolve a file *or* folder inside a share; the share root itself is off limits."""
+    share = _require_share(state, share_id)
+    item = resolve_in_share(share, relative_path)
+    if item == Path(share.path).resolve():
+        raise FileAccessError("The shared folder itself cannot be changed from another device.")
+    if not item.exists():
+        raise FileAccessError("That item no longer exists.")
+    return item
+
+
+def create_folder(state: HubState, share_id: str, parent_path: str, name: str) -> Path:
+    share = _require_share(state, share_id)
+    parent = resolve_in_share(share, parent_path)
+    if not parent.is_dir():
+        raise FileAccessError("Destination folder not found.")
+    target = parent / validate_filename(name)
+    if target.exists():
+        raise FileAccessError("A file or folder with this name already exists.")
+    target.mkdir()
+    return target
+
+
+def rename_entry(state: HubState, share_id: str, relative_path: str, new_name: str) -> Path:
+    item = resolve_entry(state, share_id, relative_path)
+    target = item.parent / validate_filename(new_name)
+    if target == item:
+        raise FileAccessError("That is already the name of this item.")
+    if target.exists():
+        raise FileAccessError("A file or folder with this name already exists.")
+    item.rename(target)
+    return target
+
+
+def delete_entry(state: HubState, share_id: str, relative_path: str, recursive: bool = False) -> str:
+    """Delete a file, or a folder when the caller explicitly asked for a recursive delete."""
+    item = resolve_entry(state, share_id, relative_path)
+    if item.is_dir():
+        if any(item.iterdir()) and not recursive:
+            raise FileAccessError("This folder is not empty. Confirm a recursive delete first.")
+        shutil.rmtree(item)
+        return "folder"
+    item.unlink()
+    return "file"
+
+
+def properties(state: HubState, share_id: str, relative_path: str = "") -> dict:
+    share = _require_share(state, share_id)
+    item = resolve_in_share(share, relative_path)
+    if not item.exists():
+        raise FileAccessError("That item no longer exists.")
+    stat = item.stat()
+    root = Path(share.path).resolve()
+    is_dir = item.is_dir()
+    detail: dict = {
+        "name": item.name if item != root else share.name,
+        "path": "" if item == root else item.relative_to(root).as_posix(),
+        "kind": "folder" if is_dir else "file",
+        "size": None if is_dir else stat.st_size,
+        "modified_at": stat.st_mtime,
+        "created_at": stat.st_ctime,
+        "accessed_at": stat.st_atime,
+        "extension": "" if is_dir else item.suffix.lower(),
+        "read_only": not os.access(item, os.W_OK),
+        "share": share.name,
+        "share_permissions": share.permissions,
+    }
+    if is_dir:
+        folders = files = 0
+        for child in item.iterdir():
+            if child.is_dir():
+                folders += 1
+            else:
+                files += 1
+        detail["item_count"] = {"folders": folders, "files": files}
+    return detail
 
 
 def copy_or_move(

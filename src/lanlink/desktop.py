@@ -28,6 +28,12 @@ from .discovery import DiscoveryBrowser
 from .server import LocalService
 from .state import HubState, RemoteDevice, SettingsCorruptError
 
+PERMISSION_LABELS = {
+    "r": "Read only",
+    "rw": "Read + write",
+    "rwd": "Read + write + delete",
+}
+
 
 class HubWindow(QMainWindow):
     def __init__(self) -> None:
@@ -95,14 +101,17 @@ class HubWindow(QMainWindow):
         self.add_button.clicked.connect(self.add_folder)
         self.remove_button = QPushButton("Stop sharing selected folder")
         self.remove_button.clicked.connect(self.remove_selected)
+        self.permissions_button = QPushButton("Change permissions")
+        self.permissions_button.clicked.connect(self.cycle_permissions)
         button_row.addWidget(self.rotate_button)
         button_row.addStretch()
+        button_row.addWidget(self.permissions_button)
         button_row.addWidget(self.add_button)
         button_row.addWidget(self.remove_button)
         layout.addLayout(button_row)
 
-        self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["Shared name", "Folder"])
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Shared name", "Access", "Folder"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -232,7 +241,11 @@ class HubWindow(QMainWindow):
             name = QTableWidgetItem(share.name)
             name.setData(Qt.ItemDataRole.UserRole, share.id)
             self.table.setItem(row, 0, name)
-            self.table.setItem(row, 1, QTableWidgetItem(share.path))
+            self.table.setItem(row, 1, QTableWidgetItem(PERMISSION_LABELS[share.permissions]))
+            folder = QTableWidgetItem(share.path)
+            if not share.available:
+                folder.setText(f"{share.path}   (unavailable right now)")
+            self.table.setItem(row, 2, folder)
 
     def refresh_pairings(self) -> None:
         devices = self.state.paired_devices_snapshot()
@@ -521,6 +534,21 @@ class HubWindow(QMainWindow):
         except ValueError as error:
             QMessageBox.warning(self, "Cannot share folder", str(error))
         self.refresh()
+
+    def cycle_permissions(self) -> None:
+        """Step a share through read-only → read+write → read+write+delete."""
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "No folder selected", "Select a shared folder first.")
+            return
+        item = self.table.item(row, 0)
+        share = self.state.get_share(item.data(Qt.ItemDataRole.UserRole)) if item else None
+        if not share:
+            return
+        order = list(PERMISSION_LABELS)
+        following = order[(order.index(share.permissions) + 1) % len(order)]
+        self.state.set_share_permissions(share.id, following)
+        self.refresh_shares()
 
     def remove_selected(self) -> None:
         row = self.table.currentRow()

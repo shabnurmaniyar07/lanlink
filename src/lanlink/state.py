@@ -71,12 +71,20 @@ def constant_time_equal(left: str, right: str) -> bool:
     return secrets.compare_digest(left.encode("utf-8", "surrogatepass"), right.encode("utf-8"))
 
 
+# Per-share permission flags. Delete is opt-in because it is the irreversible one.
+PERM_READ = "r"
+PERM_WRITE = "w"
+PERM_DELETE = "d"
+DEFAULT_PERMISSIONS = "rw"
+ALL_PERMISSIONS = "rwd"
+
+
 @dataclass
 class Share:
     id: str
     name: str
     path: str
-    permissions: str = "rw"
+    permissions: str = DEFAULT_PERMISSIONS
 
     @property
     def available(self) -> bool:
@@ -84,6 +92,9 @@ class Share:
             return Path(self.path).is_dir()
         except OSError:
             return False
+
+    def allows(self, flag: str) -> bool:
+        return flag in self.permissions
 
 
 @dataclass
@@ -182,7 +193,7 @@ class HubState:
                     id=item["id"],
                     name=item["name"],
                     path=item["path"],
-                    permissions=item.get("permissions", "rw"),
+                    permissions=item.get("permissions", DEFAULT_PERMISSIONS),
                 )
             except (KeyError, TypeError):
                 continue
@@ -392,6 +403,19 @@ class HubState:
                 path=str(resolved),
             )
             self.shares[share.id] = share
+            self._save()
+            return share
+
+    def set_share_permissions(self, share_id: str, permissions: str) -> Share | None:
+        """Normalise to the known flags so a typo can never widen access."""
+        cleaned = "".join(flag for flag in ALL_PERMISSIONS if flag in permissions.lower())
+        if PERM_READ not in cleaned:
+            cleaned = PERM_READ + cleaned
+        with self._lock:
+            share = self.shares.get(share_id)
+            if not share:
+                return None
+            share.permissions = cleaned
             self._save()
             return share
 
