@@ -474,9 +474,38 @@ def test_12_large_file_transfers_intact(nodes, manager) -> None:
 # ----------------------------------------------------- 13  failure / disconnect
 
 
-def test_13_destination_going_away_mid_transfer_fails_cleanly(nodes, manager) -> None:
+class FailingDestination:
+    """Wraps a real client and drops the connection after N bytes.
+
+    A graceful or forced server shutdown is not a reliable mid-transfer failure:
+    on Windows the socket buffers happily absorb the rest of the body, so the
+    transfer completes anyway. Injecting the failure here makes the test assert
+    the behaviour that actually matters, identically on every platform.
+    """
+
+    def __init__(self, inner: LanLinkClient, fail_after: int) -> None:
+        self._inner = inner
+        self._fail_after = fail_after
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
+    def partial_status(self, *args, **kwargs) -> dict:
+        return {"received": 0, "complete": False, "size": None}
+
+    def put_stream(self, *args, **kwargs):
+        chunks = args[3] if len(args) > 3 else kwargs["chunks"]
+        sent = 0
+        for chunk in chunks:
+            sent += len(chunk)
+            if sent >= self._fail_after:
+                raise ConnectionError("The other device disconnected during the transfer.")
+        raise ConnectionError("The other device disconnected during the transfer.")
+
+
+def test_13_destination_failure_mid_transfer_never_destroys_the_source(nodes, manager) -> None:
     laptop_a, laptop_b = nodes
-    payload = os.urandom(12 * 1024 * 1024)
+    payload = os.urandom(8 * 1024 * 1024)
     source_file = laptop_a.share_root / "Interrupted.bin"
     source_file.write_bytes(payload)
 
@@ -494,25 +523,81 @@ def test_13_destination_going_away_mid_transfer_fails_cleanly(nodes, manager) ->
                 b_client,
                 laptop_a.share_id,
                 "Interrupted.bin",
-                a_client,
+                FailingDestination(a_client, fail_after=1024 * 1024),
                 laptop_b.share_id,
                 "",
                 "Interrupted.bin",
                 delete_source=True,
             ),
         )
-        # Pull the destination offline part-way through.
-        hold_mid_transfer(manager, transfer)
-        laptop_b.kill()
-        manager.resume(transfer.id)
+        wait_for(transfer, {TransferStatus.FAILED, TransferStatus.COMPLETED})
 
-        wait_for(transfer, {TransferStatus.FAILED, TransferStatus.COMPLETED}, timeout=120)
         assert transfer.status is TransferStatus.FAILED, "a dead destination must fail the transfer"
         assert transfer.error, "the failure must carry a reason for the user"
+        assert "disconnect" in transfer.error.lower()
+
         # The whole point: a failed move never destroys the source.
         assert source_file.exists()
         assert source_file.read_bytes() == payload
         assert not (laptop_b.share_root / "Interrupted.bin").exists()
+    finally:
+        a_client.close()
+        b_client.close()
+
+
+def test_13a_killing_the_destination_never_loses_the_file(nodes, manager) -> None:
+    """Kill the real server mid-transfer and assert the outcome is never lossy.
+
+    Whether the transfer fails or squeaks through depends on how much the OS
+    socket buffers absorbed, which differs between platforms. What must hold
+    everywhere: the source survives unless a byte-identical copy landed.
+    """
+    laptop_a, laptop_b = nodes
+    payload = os.urandom(12 * 1024 * 1024)
+    source_file = laptop_a.share_root / "Killed.bin"
+    source_file.write_bytes(payload)
+
+    a_client = pair(laptop_a, laptop_b)
+    b_client = pair(laptop_b, laptop_a)
+    try:
+        transfer = manager.submit(
+            kind="remote-move",
+            filename="Killed.bin",
+            source="LAPTOP-A",
+            destination="LAPTOP-B",
+            size=len(payload),
+            runner=relay_runner(
+                manager,
+                b_client,
+                laptop_a.share_id,
+                "Killed.bin",
+                a_client,
+                laptop_b.share_id,
+                "",
+                "Killed.bin",
+                delete_source=True,
+            ),
+        )
+        hold_mid_transfer(manager, transfer)
+        laptop_b.kill()
+        manager.resume(transfer.id)
+        wait_for(transfer, {TransferStatus.FAILED, TransferStatus.COMPLETED}, timeout=120)
+
+        landed = laptop_b.share_root / "Killed.bin"
+        if transfer.status is TransferStatus.COMPLETED:
+            # It got through despite the kill: then the copy must be perfect.
+            assert landed.exists() and landed.read_bytes() == payload
+        else:
+            # It failed: then the source must still be here, untouched.
+            assert transfer.error
+            assert source_file.read_bytes() == payload
+            assert not landed.exists()
+
+        # Either way the file still exists somewhere, whole.
+        survivors = [
+            path for path in (source_file, landed) if path.exists() and path.read_bytes() == payload
+        ]
+        assert survivors, "a killed transfer must never lose the file from both machines"
     finally:
         a_client.close()
         b_client.close()
