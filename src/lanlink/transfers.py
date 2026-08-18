@@ -453,3 +453,184 @@ def relay_runner(
             source_client.delete(source_share_id, source_path)
 
     return run
+
+
+# ------------------------------------------------------------- folder transfers
+
+
+def _relative_to(root: str, path: str) -> str:
+    """Path of ``path`` relative to the folder ``root``, both share-relative."""
+    if not root:
+        return path
+    prefix = root.rstrip("/") + "/"
+    return path[len(prefix) :] if path.startswith(prefix) else path
+
+
+def _join(*parts: str) -> str:
+    return "/".join(part.strip("/") for part in parts if part.strip("/"))
+
+
+def _ensure_remote_tree(client: LanLinkClient, share_id: str, base: str, folders: list[str]) -> None:
+    """Create each folder in ``folders`` under ``base`` on the receiving node."""
+    for relative in sorted(folders, key=lambda item: item.count("/")):
+        parent, _, name = relative.rpartition("/")
+        try:
+            client.create_folder(share_id, _join(base, parent), name or relative)
+        except Exception as error:  # noqa: BLE001
+            # An existing folder is fine; anything else is a real failure.
+            if "already exists" not in str(error).lower() and "409" not in str(error):
+                raise
+
+
+def relay_folder_runner(
+    manager: TransferManager,
+    source_client: LanLinkClient,
+    source_share_id: str,
+    source_path: str,
+    destination_client: LanLinkClient,
+    destination_share_id: str,
+    destination_folder: str,
+    name: str,
+    delete_source: bool = False,
+    verify: bool = True,
+) -> Callable[[Transfer, _Control], None]:
+    """Copy or move a whole folder tree between two nodes, streamed file by file.
+
+    The source tree is removed only after every file has arrived and verified.
+    """
+
+    def run(transfer: Transfer, control: _Control) -> None:
+        folders, files = source_client.walk(source_share_id, source_path)
+        transfer.size = sum(int(entry.get("size") or 0) for entry in files)
+        transfer.transferred = 0
+
+        target_root = _join(destination_folder, name)
+        _ensure_remote_tree(destination_client, destination_share_id, "", [target_root])
+        relative_folders = [_relative_to(source_path, folder) for folder in folders]
+        _ensure_remote_tree(
+            destination_client, destination_share_id, target_root, relative_folders
+        )
+
+        for entry in files:
+            control.resume.wait()
+            if control.cancel.is_set():
+                raise TransferCancelled
+            relative = _relative_to(source_path, entry["path"])
+            parent, _, filename = relative.rpartition("/")
+            digest = None
+            if verify:
+                try:
+                    digest = source_client.checksum(source_share_id, entry["path"])
+                except Exception:  # noqa: BLE001
+                    digest = None
+
+            with source_client.open_stream(source_share_id, entry["path"]) as response:
+
+                def chunks() -> Iterator[bytes]:
+                    for chunk in response.iter_bytes(CHUNK_SIZE):
+                        manager.advance(transfer, control, len(chunk))
+                        yield chunk
+
+                destination_client.put_stream(
+                    destination_share_id,
+                    _join(target_root, parent),
+                    filename,
+                    chunks(),
+                    sha256=digest,
+                )
+
+        if delete_source:
+            source_client.delete(source_share_id, source_path, recursive=True)
+
+    return run
+
+
+def download_folder_runner(
+    manager: TransferManager,
+    client: LanLinkClient,
+    share_id: str,
+    path: str,
+    destination: Path,
+    verify: bool = True,
+) -> Callable[[Transfer, _Control], None]:
+    """Mirror a remote folder tree onto local disk."""
+
+    def run(transfer: Transfer, control: _Control) -> None:
+        folders, files = client.walk(share_id, path)
+        transfer.size = sum(int(entry.get("size") or 0) for entry in files)
+        transfer.transferred = 0
+
+        destination.mkdir(parents=True, exist_ok=True)
+        for folder in folders:
+            (destination / _relative_to(path, folder)).mkdir(parents=True, exist_ok=True)
+
+        for entry in files:
+            control.resume.wait()
+            if control.cancel.is_set():
+                raise TransferCancelled
+            target = destination / _relative_to(path, entry["path"])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                continue
+            partial = target.with_name(target.name + PART_SUFFIX)
+            expected = None
+            if verify:
+                try:
+                    expected = client.checksum(share_id, entry["path"])
+                except Exception:  # noqa: BLE001
+                    expected = None
+            with client.open_stream(share_id, entry["path"]) as response, partial.open("wb") as out:
+                for chunk in response.iter_bytes(CHUNK_SIZE):
+                    out.write(chunk)
+                    manager.advance(transfer, control, len(chunk))
+            if expected:
+                _verify(expected, sha256_of(partial), target.name)
+            partial.replace(target)
+
+    return run
+
+
+def upload_folder_runner(
+    manager: TransferManager,
+    client: LanLinkClient,
+    share_id: str,
+    folder: str,
+    source: Path,
+    verify: bool = True,
+) -> Callable[[Transfer, _Control], None]:
+    """Mirror a local folder tree onto a remote node."""
+
+    def run(transfer: Transfer, control: _Control) -> None:
+        files = [item for item in sorted(source.rglob("*")) if item.is_file()]
+        directories = [item for item in sorted(source.rglob("*")) if item.is_dir()]
+        transfer.size = sum(item.stat().st_size for item in files)
+        transfer.transferred = 0
+
+        target_root = _join(folder, source.name)
+        _ensure_remote_tree(client, share_id, "", [target_root])
+        _ensure_remote_tree(
+            client,
+            share_id,
+            target_root,
+            [item.relative_to(source).as_posix() for item in directories],
+        )
+
+        for item in files:
+            control.resume.wait()
+            if control.cancel.is_set():
+                raise TransferCancelled
+            relative = item.relative_to(source).as_posix()
+            parent, _, filename = relative.rpartition("/")
+            digest = sha256_of(item) if verify else None
+
+            def chunks(path: Path = item) -> Iterator[bytes]:
+                with path.open("rb") as handle:
+                    while block := handle.read(CHUNK_SIZE):
+                        manager.advance(transfer, control, len(block))
+                        yield block
+
+            client.put_stream(
+                share_id, _join(target_root, parent), filename, chunks(), sha256=digest
+            )
+
+    return run

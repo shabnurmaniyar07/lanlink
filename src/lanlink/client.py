@@ -250,3 +250,22 @@ class LanLinkClient:
             )
         response.raise_for_status()
         return response.json()
+
+    def walk(self, share_id: str, path: str = "") -> tuple[list[str], list[dict]]:
+        """Depth-first listing of one folder: (sub-folder paths, file entries).
+
+        Paths are relative to the share root, so they can be replayed verbatim
+        against another node.
+        """
+        folders: list[str] = []
+        files: list[dict] = []
+        queue = [path]
+        while queue:
+            current = queue.pop(0)
+            for entry in self.list_folder(share_id, current):
+                if entry.get("kind") == "folder":
+                    folders.append(entry["path"])
+                    queue.append(entry["path"])
+                else:
+                    files.append(entry)
+        return folders, files

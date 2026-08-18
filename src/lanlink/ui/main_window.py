@@ -43,8 +43,11 @@ from ..state import ALL_PERMISSIONS, HubState, RemoteDevice
 from ..transfers import (
     TransferManager,
     TransferStatus,
+    download_folder_runner,
     download_runner,
+    relay_folder_runner,
     relay_runner,
+    upload_folder_runner,
     upload_runner,
 )
 from .browser_model import EntryFilterProxy, RemoteEntryModel, format_size, format_time
@@ -1075,6 +1078,8 @@ class MainWindow(QMainWindow):
         menu.addAction("Open", self.activate_entry)
         download = menu.addAction("Download…", self.download_selection)
         download.setEnabled(not is_share)
+        upload_folder = menu.addAction("Upload folder…", self.upload_folder_into_current)
+        upload_folder.setEnabled(writable and not is_share)
         menu.addSeparator()
         upload = menu.addAction("Upload here…", self.upload_into_current)
         upload.setEnabled(writable and not is_share)
@@ -1116,30 +1121,44 @@ class MainWindow(QMainWindow):
         self._after_transfer(transfer, lambda: open_local_file(destination))
 
     def download_selection(self) -> None:
-        entries = [entry for entry in self._selected_entries() if entry.get("kind") == "file"]
+        entries = [entry for entry in self._selected_entries() if entry.get("kind") in {"file", "folder"}]
         device, share = self.current_device, self.current_share
         if not entries or not share or device is None:
-            self._warn("Nothing to download", "Select one or more files first.")
+            self._warn("Nothing to download", "Select one or more files or folders first.")
             return
-        folder = QFileDialog.getExistingDirectory(self, "Save files to")
+        folder = QFileDialog.getExistingDirectory(self, "Save to")
         if not folder:
             return
         client = self._client_for(device)
         share_id = share["share_id"]
         for entry in entries:
             destination = Path(folder) / entry["name"]
-            if destination.exists():
+            is_folder = entry.get("kind") == "folder"
+            if destination.exists() and not is_folder:
                 self._show_error(f"{entry['name']} already exists in that folder; skipped.")
                 continue
+            runner = (
+                download_folder_runner(self.transfers, client, share_id, entry["path"], destination)
+                if is_folder
+                else download_runner(self.transfers, client, share_id, entry["path"], destination)
+            )
             self.transfers.submit(
-                kind="download",
+                kind="download-folder" if is_folder else "download",
                 filename=entry["name"],
                 source=f"{device.name}/{share['name']}",
                 destination=folder,
                 size=entry.get("size"),
-                runner=download_runner(self.transfers, client, share_id, entry["path"], destination),
+                runner=runner,
             )
         self.sidebar.setCurrentRow(PAGE_TRANSFERS)
+
+    def upload_folder_into_current(self) -> None:
+        if not self.current_share:
+            self._warn("Open a folder first", "Open a shared folder before uploading.")
+            return
+        chosen = QFileDialog.getExistingDirectory(self, "Choose a folder to upload")
+        if chosen:
+            self.upload_paths([Path(chosen)])
 
     def upload_into_current(self) -> None:
         if not self.current_share:
@@ -1159,13 +1178,19 @@ class MainWindow(QMainWindow):
         client = self._client_for(self.current_device)
         share_id = self.current_share["share_id"]
         for path in paths:
+            is_folder = path.is_dir()
+            runner = (
+                upload_folder_runner(self.transfers, client, share_id, self.current_path, path)
+                if is_folder
+                else upload_runner(self.transfers, client, share_id, self.current_path, path)
+            )
             self.transfers.submit(
-                kind="upload",
-                filename=path.name,
+                kind="upload-folder" if is_folder else "upload",
+                filename=path.name + ("/" if is_folder else ""),
                 source=str(path.parent),
                 destination=f"{self.current_device.name}/{self.current_share['name']}",
-                size=path.stat().st_size,
-                runner=upload_runner(self.transfers, client, share_id, self.current_path, path),
+                size=None if is_folder else path.stat().st_size,
+                runner=runner,
             )
         self.sidebar.setCurrentRow(PAGE_TRANSFERS)
         QTimer.singleShot(1200, self.reload_current_folder)
@@ -1302,10 +1327,12 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def transfer_selection(self, move: bool) -> None:
-        entries = [entry for entry in self._selected_entries() if entry.get("kind") == "file"]
+        entries = [
+            entry for entry in self._selected_entries() if entry.get("kind") in {"file", "folder"}
+        ]
         device, share = self.current_device, self.current_share
         if not entries or not share or device is None:
-            self._warn("Nothing selected", "Select one or more files first.")
+            self._warn("Nothing selected", "Select one or more files or folders first.")
             return
         targets = [
             candidate
@@ -1332,13 +1359,15 @@ class MainWindow(QMainWindow):
         share_id = share["share_id"]
 
         for entry in entries:
+            is_folder = entry.get("kind") == "folder"
+            relay = relay_folder_runner if is_folder else relay_runner
             self.transfers.submit(
-                kind="remote-move" if move else "remote-copy",
-                filename=entry["name"],
+                kind=("remote-move" if move else "remote-copy") + ("-folder" if is_folder else ""),
+                filename=entry["name"] + ("/" if is_folder else ""),
                 source=f"{device.name}/{share['name']}",
                 destination=f"{destination_device.name}/{destination_share['name']}",
                 size=entry.get("size"),
-                runner=relay_runner(
+                runner=relay(
                     self.transfers,
                     source_client,
                     share_id,

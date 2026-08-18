@@ -81,7 +81,7 @@ class DropTreeView(QTreeView):
         paths = [
             Path(url.toLocalFile())
             for url in event.mimeData().urls()
-            if url.isLocalFile() and Path(url.toLocalFile()).is_file()
+            if url.isLocalFile() and Path(url.toLocalFile()).exists()
         ]
         if paths:
             self.filesDropped.emit(paths)
