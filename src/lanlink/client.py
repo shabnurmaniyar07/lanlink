@@ -49,15 +49,37 @@ class LanLinkClient:
         response.raise_for_status()
         return response.json()["entries"]
 
+    def device_info(self) -> dict:
+        response = self.http.get(f"{self.base_url}/v1/device", timeout=5)
+        response.raise_for_status()
+        return response.json()
+
+    def unpair(self, client_id: str) -> bool:
+        """Remove this client's own pairing. A device cannot revoke any other."""
+        response = self.http.delete(f"{self.base_url}/v1/pairings/{client_id}", headers=self.headers)
+        response.raise_for_status()
+        return bool(response.json().get("revoked"))
+
     def download(self, share_id: str, path: str, destination: Path) -> Path:
+        """Stream to disk; a failed transfer never leaves a partial file behind."""
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with self.http.stream(
-            "GET", f"{self.base_url}/v1/files/{share_id}", params={"path": path}, headers=self.headers
-        ) as response:
-            response.raise_for_status()
-            with destination.open("xb") as output:
-                for chunk in response.iter_bytes():
-                    output.write(chunk)
+        created = False
+        try:
+            with self.http.stream(
+                "GET",
+                f"{self.base_url}/v1/files/{share_id}",
+                params={"path": path},
+                headers=self.headers,
+            ) as response:
+                response.raise_for_status()
+                with destination.open("xb") as output:
+                    created = True
+                    for chunk in response.iter_bytes():
+                        output.write(chunk)
+        except BaseException:
+            if created:
+                destination.unlink(missing_ok=True)
+            raise
         return destination
 
     def upload(self, share_id: str, destination_folder: str, source: Path) -> dict:

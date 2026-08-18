@@ -5,8 +5,7 @@ import time
 from pathlib import Path
 
 from httpx import HTTPError
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -17,17 +16,17 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from .client import LanLinkClient
 from .discovery import DiscoveryBrowser
-from .server import LocalService, reachable_address
-from .state import HubState, RemoteDevice
+from .server import LocalService
+from .state import HubState, RemoteDevice, SettingsCorruptError
 
 
 class HubWindow(QMainWindow):
@@ -46,7 +45,10 @@ class HubWindow(QMainWindow):
 
         root = QWidget()
         layout = QVBoxLayout(root)
-        header = QLabel("<h2>LanLink Hub</h2><p>Share only the folders you choose with paired devices on this network.</p>")
+        header = QLabel(
+            "<h2>LanLink Hub</h2><p>Share only the folders you choose with "
+            "paired devices on this network.</p>"
+        )
         header.setWordWrap(True)
         layout.addWidget(header)
 
@@ -54,7 +56,7 @@ class HubWindow(QMainWindow):
         self.address = QLabel()
         self.code = QLabel()
         self.code.setStyleSheet("font-size: 20px; font-weight: 600;")
-        details.addRow("Open on a paired phone or computer:", self.address)
+        details.addRow("This device is reachable at:", self.address)
         details.addRow("Pairing code:", self.code)
         layout.addLayout(details)
 
@@ -65,7 +67,12 @@ class HubWindow(QMainWindow):
         layout.addWidget(self.tabs)
         self.setCentralWidget(root)
 
-        self.service.start()
+        if not self.service.start():
+            QMessageBox.warning(
+                self,
+                "LanLink could not start",
+                self.service.last_error or "The local network service did not start.",
+            )
         self.discovery_browser.start()
         self.refresh()
 
@@ -82,8 +89,8 @@ class HubWindow(QMainWindow):
         layout = QVBoxLayout(tab)
 
         button_row = QHBoxLayout()
-        self.rotate_button = QPushButton("New pairing code")
-        self.rotate_button.clicked.connect(self.rotate_code)
+        self.rotate_button = QPushButton("Allow a device to pair")
+        self.rotate_button.clicked.connect(self.toggle_pairing)
         self.add_button = QPushButton("Add shared folder")
         self.add_button.clicked.connect(self.add_folder)
         self.remove_button = QPushButton("Stop sharing selected folder")
@@ -157,7 +164,7 @@ class HubWindow(QMainWindow):
         self.remote_url_input = QLineEdit()
         self.remote_url_input.setPlaceholderText("http://192.168.1.20:8765")
         self.remote_pair_code_input = QLineEdit()
-        self.remote_pair_code_input.setPlaceholderText("6-digit code from the other computer")
+        self.remote_pair_code_input.setPlaceholderText("8-digit code from the other computer")
         pair_details.addRow("Remote address:", self.remote_url_input)
         pair_details.addRow("Pairing code:", self.remote_pair_code_input)
         layout.addLayout(pair_details)
@@ -208,7 +215,7 @@ class HubWindow(QMainWindow):
         return tab
 
     def refresh(self) -> None:
-        self.address.setText(f"{reachable_address(self.service.port)}  (same Wi-Fi or hotspot only)")
+        self.address.setText(f"{self.service.url}  (same Wi-Fi or hotspot only)")
         self.refresh_code()
         self.refresh_shares()
         self.refresh_devices()
@@ -254,7 +261,8 @@ class HubWindow(QMainWindow):
         self.nearby_status.setText(
             f"{len(devices)} nearby LanLink device{'s' if len(devices) != 1 else ''} found."
             if devices
-            else "No other LanLink devices found yet. Start LanLink on another computer on the same Wi-Fi or hotspot."
+            else "No other LanLink devices found yet. Start LanLink on another\n"
+            "computer on the same Wi-Fi or hotspot."
         )
         self.nearby_table.setRowCount(len(devices))
         for row, device in enumerate(devices):
@@ -467,7 +475,9 @@ class HubWindow(QMainWindow):
             return
         target = Path(destination)
         if target.exists():
-            QMessageBox.warning(self, "File exists", "Choose a new filename. LanLink will not overwrite files.")
+            QMessageBox.warning(
+                self, "File exists", "Choose a new filename. LanLink will not overwrite files."
+            )
             return
 
         device = self.state.get_remote_device(self.remote_current_device_id)
@@ -484,12 +494,22 @@ class HubWindow(QMainWindow):
         self.remote_status.setText(f"Downloaded {item['name']} to {target}.")
 
     def refresh_code(self) -> None:
-        code, expires_at = self.state.pairing_code()
+        """No code exists unless the local owner has switched pairing mode on."""
+        current = self.state.pairing_code()
+        if current is None:
+            self.code.setText("Off — nobody can pair with this device.")
+            self.rotate_button.setText("Allow a device to pair")
+            return
+        code, expires_at = current
         seconds = max(0, int(expires_at - time.time()))
-        self.code.setText(f"{code}  (expires in {seconds // 60}:{seconds % 60:02d})")
+        self.code.setText(f"{code}  (expires in {seconds // 60}:{seconds % 60:02d}, one device)")
+        self.rotate_button.setText("Stop allowing pairing")
 
-    def rotate_code(self) -> None:
-        self.state.rotate_pair_code()
+    def toggle_pairing(self) -> None:
+        if self.state.pairing_armed:
+            self.state.cancel_pairing()
+        else:
+            self.state.start_pairing()
         self.refresh_code()
 
     def add_folder(self) -> None:
@@ -519,14 +539,24 @@ class HubWindow(QMainWindow):
             self.refresh_pairings()
 
     def open_selected_device(self) -> None:
-        row = self.nearby_table.currentRow()
-        if row < 0:
+        """Open the device inside LanLink. Never hands off to a web browser."""
+        url = self._selected_nearby_url()
+        if not url:
             QMessageBox.information(self, "No device selected", "Select a nearby LanLink device first.")
             return
-        item = self.nearby_table.item(row, 0)
-        url = item.data(Qt.ItemDataRole.UserRole) if item else None
-        if url:
-            QDesktopServices.openUrl(QUrl(url))
+        existing = next(
+            (d for d in self.state.remote_devices_snapshot() if d.base_url == url.rstrip("/")),
+            None,
+        )
+        if existing:
+            self.tabs.setCurrentIndex(self.remote_tab_index)
+            self.load_remote_root(existing)
+            return
+        self.remote_url_input.setText(url)
+        self.tabs.setCurrentIndex(self.remote_tab_index)
+        self.remote_status.setText(
+            f"{url} is not paired yet. Enable pairing mode on that device, then enter its code here."
+        )
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self.discovery_browser.stop()
@@ -536,7 +566,12 @@ class HubWindow(QMainWindow):
 
 def main() -> None:
     app = QApplication(sys.argv)
-    window = HubWindow()
+    try:
+        window = HubWindow()
+    except SettingsCorruptError as error:
+        # Never silently mint a new device identity: every peer's pairing depends on it.
+        QMessageBox.critical(None, "LanLink settings problem", str(error))
+        sys.exit(1)
     window.show()
     sys.exit(app.exec())
 

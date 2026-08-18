@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import socket
 import threading
@@ -7,12 +8,40 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from zeroconf import ServiceBrowser, ServiceInfo, Zeroconf
+from zeroconf import ServiceBrowser, ServiceInfo, ServiceListener, Zeroconf
 
 from .state import HubState
 
-
 SERVICE_TYPE = "_lanlink._tcp.local."
+
+_shared_lock = threading.RLock()
+_shared_zeroconf: Zeroconf | None = None
+_shared_users = 0
+
+
+def acquire_zeroconf() -> Zeroconf:
+    """One Zeroconf instance per process: advertising and browsing share it.
+
+    Two instances mean two sets of multicast sockets, two Windows firewall
+    prompts, and avoidable multicast-group contention.
+    """
+    global _shared_zeroconf, _shared_users
+    with _shared_lock:
+        if _shared_zeroconf is None:
+            _shared_zeroconf = Zeroconf()
+        _shared_users += 1
+        return _shared_zeroconf
+
+
+def release_zeroconf() -> None:
+    global _shared_zeroconf, _shared_users
+    with _shared_lock:
+        if _shared_users <= 0:
+            return
+        _shared_users -= 1
+        if _shared_users == 0 and _shared_zeroconf is not None:
+            _shared_zeroconf.close()
+            _shared_zeroconf = None
 
 
 @dataclass
@@ -46,7 +75,7 @@ def local_ipv4_address_strings() -> list[str]:
         pass
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            add_address(info[4][0])
+            add_address(str(info[4][0]))
     except socket.gaierror:
         pass
 
@@ -95,7 +124,7 @@ def _first_ipv4_address(info: ServiceInfo) -> str | None:
 
 def device_from_service_info(info: ServiceInfo) -> NearbyDevice | None:
     host = _first_ipv4_address(info)
-    if not host:
+    if not host or not info.port:
         return None
     properties = _decode_properties(info.properties)
     device_id = properties.get("id", "").strip()
@@ -133,11 +162,17 @@ class DiscoveryService:
             name=f"{device['name']}.{SERVICE_TYPE}",
             addresses=addresses,
             port=self.port,
-            properties={"id": device["id"], "name": device["name"], "api": "v1"},
+            properties={
+                "id": device["id"],
+                "name": device["name"],
+                "api": "v1",
+                "platform": device.get("platform", ""),
+                "version": device.get("version", ""),
+            },
             server=f"lanlink-{device['id'][:8]}.local.",
         )
         try:
-            self.zeroconf = Zeroconf()
+            self.zeroconf = acquire_zeroconf()
             self.zeroconf.register_service(self.info, allow_name_change=True)
         except Exception as error:
             self.last_error = str(error)
@@ -148,17 +183,15 @@ class DiscoveryService:
 
     def stop(self) -> None:
         if self.zeroconf and self.info:
-            try:
+            with contextlib.suppress(Exception):
                 self.zeroconf.unregister_service(self.info)
-            except Exception:
-                pass
         if self.zeroconf:
-            self.zeroconf.close()
+            release_zeroconf()
         self.zeroconf = None
         self.info = None
 
 
-class _DiscoveryListener:
+class _DiscoveryListener(ServiceListener):
     def __init__(self, owner: DiscoveryBrowser) -> None:
         self.owner = owner
 
@@ -189,7 +222,7 @@ class DiscoveryBrowser:
         if self.zeroconf:
             return True
         try:
-            self.zeroconf = Zeroconf()
+            self.zeroconf = acquire_zeroconf()
             self.listener = _DiscoveryListener(self)
             self.browser = ServiceBrowser(self.zeroconf, SERVICE_TYPE, listener=self.listener)
         except Exception as error:
@@ -203,7 +236,7 @@ class DiscoveryBrowser:
         if self.browser:
             self.browser.cancel()
         if self.zeroconf:
-            self.zeroconf.close()
+            release_zeroconf()
         self.browser = None
         self.listener = None
         self.zeroconf = None

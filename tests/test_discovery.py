@@ -3,7 +3,7 @@ import time
 
 from zeroconf import ServiceInfo
 
-from lanlink.discovery import DiscoveryBrowser, NearbyDevice, SERVICE_TYPE, device_from_service_info
+from lanlink.discovery import SERVICE_TYPE, DiscoveryBrowser, NearbyDevice, device_from_service_info
 
 
 def test_parses_nearby_device_from_mdns_service_info() -> None:
