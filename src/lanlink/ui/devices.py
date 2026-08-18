@@ -51,6 +51,8 @@ class UnifiedDevice:
     status: DeviceStatus = DeviceStatus.OFFLINE
     last_seen: float | None = None
     error: str = ""
+    fingerprint: str = ""  # advertised over mDNS, or the pinned one once paired
+    pinned: bool = False
 
     @property
     def badge(self) -> str:
@@ -75,6 +77,8 @@ class UnifiedDevice:
             parts.append("not paired yet" if self.discovered else "no address known")
         if self.paired_in and not self.paired_out:
             parts.append("this device can reach you")
+        if self.pinned:
+            parts.append("certificate pinned")
         return "  •  ".join(parts)
 
 
@@ -92,7 +96,12 @@ def merge_devices(
 
     for remote in remotes:
         merged[remote.id] = UnifiedDevice(
-            id=remote.id, name=remote.name, address=remote.base_url, paired_out=True
+            id=remote.id,
+            name=remote.name,
+            address=remote.base_url,
+            paired_out=True,
+            fingerprint=remote.fingerprint,
+            pinned=bool(remote.certificate),
         )
 
     for device in nearby:
@@ -108,6 +117,9 @@ def merge_devices(
         entry.name = device.name or entry.name
         entry.platform = getattr(device, "platform", "") or entry.platform
         entry.version = getattr(device, "version", "") or entry.version
+        # Keep the pinned fingerprint; only fill in the advertised one when unpaired.
+        if not entry.pinned:
+            entry.fingerprint = getattr(device, "fingerprint", "") or entry.fingerprint
 
     for known in paired:
         entry = merged.get(known.id)

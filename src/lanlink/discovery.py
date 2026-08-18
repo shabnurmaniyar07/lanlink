@@ -53,10 +53,14 @@ class NearbyDevice:
     api: str
     service_name: str
     last_seen: float
+    scheme: str = "https"
+    platform: str = ""
+    version: str = ""
+    fingerprint: str = ""
 
     @property
     def url(self) -> str:
-        return f"http://{self.host}:{self.port}"
+        return f"{self.scheme}://{self.host}:{self.port}"
 
 
 def local_ipv4_address_strings() -> list[str]:
@@ -138,15 +142,20 @@ def device_from_service_info(info: ServiceInfo) -> NearbyDevice | None:
         api=properties.get("api") or "v1",
         service_name=info.name,
         last_seen=time.time(),
+        scheme=properties.get("scheme") or "https",
+        platform=properties.get("platform", ""),
+        version=properties.get("version", ""),
+        fingerprint=properties.get("fp", ""),
     )
 
 
 class DiscoveryService:
     """Advertises this node with mDNS. Pairing still requires a visible short code."""
 
-    def __init__(self, state: HubState, port: int) -> None:
+    def __init__(self, state: HubState, port: int, scheme: str = "https") -> None:
         self.state = state
         self.port = port
+        self.scheme = scheme
         self.zeroconf: Zeroconf | None = None
         self.info: ServiceInfo | None = None
         self.last_error: str | None = None
@@ -168,6 +177,8 @@ class DiscoveryService:
                 "api": "v1",
                 "platform": device.get("platform", ""),
                 "version": device.get("version", ""),
+                "scheme": self.scheme,
+                "fp": device.get("fingerprint", "")[:32],
             },
             server=f"lanlink-{device['id'][:8]}.local.",
         )

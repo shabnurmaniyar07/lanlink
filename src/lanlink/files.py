@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -22,6 +23,40 @@ MAX_NAME_LENGTH = 255
 
 class FileAccessError(ValueError):
     pass
+
+
+def resumable_state(state: HubState, share_id: str, folder_path: str, filename: str) -> dict:
+    """How many bytes of this upload the receiver already holds."""
+    target = destination_for_upload(state, share_id, folder_path, filename)
+    partial = partial_for(target)
+    if target.exists():
+        return {"received": 0, "complete": True, "size": target.stat().st_size}
+    received = partial.stat().st_size if partial.exists() else 0
+    return {"received": received, "complete": False, "size": None}
+
+
+def finalize_upload(
+    state: HubState, share_id: str, folder_path: str, filename: str, sha256: str | None = None
+) -> Path:
+    """Verify the accumulated part file, then publish it under its real name."""
+    target = destination_for_upload(state, share_id, folder_path, filename)
+    partial = partial_for(target)
+    if not partial.exists():
+        raise FileAccessError("There is no partial upload to finish.")
+    if target.exists():
+        partial.unlink(missing_ok=True)
+        raise FileAccessError("A file with this name already exists.")
+    if sha256:
+        actual = sha256_of(partial)
+        if actual.lower() != sha256.lower():
+            partial.unlink(missing_ok=True)
+            raise FileAccessError("The uploaded file did not match its checksum and was discarded.")
+    partial.replace(target)
+    return target
+
+
+def checksum(state: HubState, share_id: str, relative_path: str) -> str:
+    return sha256_of(get_file(state, share_id, relative_path))
 
 
 def validate_filename(filename: str) -> str:
@@ -96,6 +131,8 @@ def list_folder(state: HubState, share_id: str, relative_path: str = "") -> list
     root = Path(share.path).resolve()
     entries = []
     for item in folder.iterdir():
+        if is_partial(item.name):
+            continue  # an unfinished upload is not a file the user owns yet
         try:
             stat = item.stat()
         except OSError:
@@ -121,6 +158,27 @@ def destination_for_upload(state: HubState, share_id: str, folder_path: str, fil
     if not folder.is_dir():
         raise FileAccessError("Destination folder not found.")
     return folder / safe_name
+
+
+PART_SUFFIX = ".lanlink-part"
+HASH_CHUNK = 1024 * 1024
+
+
+def sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(HASH_CHUNK):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def partial_for(target: Path) -> Path:
+    """Where an in-flight upload accumulates before it is verified and renamed."""
+    return target.with_name(target.name + PART_SUFFIX)
+
+
+def is_partial(name: str) -> bool:
+    return name.endswith(PART_SUFFIX)
 
 
 def _require_share(state: HubState, share_id: str) -> Share:

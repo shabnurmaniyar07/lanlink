@@ -6,7 +6,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -35,7 +35,9 @@ from PySide6.QtWidgets import (
 )
 
 from ..client import LanLinkClient
-from ..discovery import DiscoveryBrowser
+from ..crypto import fetch_peer_certificate, fingerprint_of_pem, secrets_are_protected, short_fingerprint
+from ..discovery import DiscoveryBrowser, local_ipv4_address_strings
+from ..invite import InvalidInvite, Invite, parse_invite
 from ..server import LocalService
 from ..state import ALL_PERMISSIONS, HubState, RemoteDevice
 from ..transfers import (
@@ -49,6 +51,7 @@ from .browser_model import EntryFilterProxy, RemoteEntryModel, format_size, form
 from .devices import DeviceListModel, DeviceStatus, HealthTracker, UnifiedDevice, merge_devices
 from .jobs import JobRunner
 from .pairing import PairingApproval
+from .qrcode import QrLabel
 from .transfer_model import TransferTableModel, summarise
 from .widgets import Breadcrumb, DropTreeView, ProgressDelegate, open_local_file
 
@@ -57,6 +60,20 @@ PAGE_MY_DEVICE, PAGE_DEVICES, PAGE_TRANSFERS, PAGE_SHARES, PAGE_HISTORY, PAGE_SE
 PAGE_BROWSER = 6
 
 PERMISSION_CHOICES = [("r", "Read only"), ("rw", "Read + write"), (ALL_PERMISSIONS, "Read + write + delete")]
+
+
+class TransferBridge(QObject):
+    """Turns TransferManager callbacks into a Qt signal.
+
+    The manager calls back from worker threads; emitting a signal on a QObject
+    owned by the GUI thread makes Qt queue the delivery, so the UI updates the
+    moment a transfer moves instead of waiting for a poll.
+    """
+
+    changed = Signal()
+
+    def notify(self, _transfer: object) -> None:
+        self.changed.emit()
 
 
 class DestinationDialog(QDialog):
@@ -139,11 +156,14 @@ class MainWindow(QMainWindow):
         self.state.approval_callback = self.approval.request
         self.service = LocalService(self.state)
         self.discovery = DiscoveryBrowser(local_device_id=self.state.device_id)
-        self.transfers = TransferManager(workers=3)
+        self.bridge = TransferBridge()
+        self.transfers = TransferManager(workers=3, on_change=self.bridge.notify)
         self.health = HealthTracker()
         self._clients: dict[str, LanLinkClient] = {}
         self._probing: set[str] = set()
 
+        self._invite: Invite | None = None
+        self._addresses = local_ipv4_address_strings()
         self.current_device: UnifiedDevice | None = None
         self.current_share: dict | None = None
         self.current_path = ""
@@ -160,6 +180,7 @@ class MainWindow(QMainWindow):
             )
         self.discovery.start()
 
+        self.bridge.changed.connect(self.refresh_transfers)
         self.refresh_all()
         self._start_timers()
 
@@ -218,10 +239,14 @@ class MainWindow(QMainWindow):
         self.my_status = QLabel()
         self.my_id = QLabel()
         self.my_id.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.my_fingerprint = QLabel()
+        self.my_fingerprint.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.my_fingerprint.setStyleSheet("font-family: monospace;")
         form.addRow("Name:", self.my_name)
         form.addRow("Status:", self.my_status)
         form.addRow("Address:", self.my_address)
         form.addRow("Device id:", self.my_id)
+        form.addRow("Certificate:", self.my_fingerprint)
         layout.addLayout(form)
 
         layout.addSpacing(10)
@@ -237,9 +262,26 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         self.pairing_button = QPushButton("Allow a device to pair")
         self.pairing_button.clicked.connect(self.toggle_pairing)
+        self.copy_invite_button = QPushButton("Copy invite link")
+        self.copy_invite_button.clicked.connect(self.copy_invite)
+        self.copy_invite_button.setEnabled(False)
         row.addWidget(self.pairing_button)
+        row.addWidget(self.copy_invite_button)
         row.addStretch()
         layout.addLayout(row)
+
+        qr_row = QHBoxLayout()
+        self.qr_label = QrLabel()
+        qr_row.addWidget(self.qr_label)
+        qr_hint = QLabel(
+            "Scan this with LanLink on a phone, or press <b>Copy invite link</b> and paste it "
+            "into the other computer's Devices page. The invite carries this device's "
+            "certificate, so the other side pins the right identity."
+        )
+        qr_hint.setWordWrap(True)
+        qr_hint.setStyleSheet("color: #5c6473;")
+        qr_row.addWidget(qr_hint, 1)
+        layout.addLayout(qr_row)
         layout.addStretch()
         return page
 
@@ -280,8 +322,10 @@ class MainWindow(QMainWindow):
 
         manual = QHBoxLayout()
         self.manual_address = QLineEdit()
-        self.manual_address.setPlaceholderText("Add by address, e.g. 192.168.1.20:8765")
-        manual_button = QPushButton("Pair with this address")
+        self.manual_address.setPlaceholderText(
+            "Paste an invite link, or type an address such as 192.168.1.20:8765"
+        )
+        manual_button = QPushButton("Use invite / address")
         manual_button.clicked.connect(self.pair_manual_address)
         manual.addWidget(self.manual_address)
         manual.addWidget(manual_button)
@@ -470,14 +514,25 @@ class MainWindow(QMainWindow):
         )
         self.setting_bind_all.setChecked(self.state.bind_all_interfaces)
         form.addRow("Network:", self.setting_bind_all)
+
+        self.setting_tls = QCheckBox("Encrypt connections with TLS and pinned certificates")
+        self.setting_tls.setChecked(self.state.use_tls)
+        form.addRow("Security:", self.setting_tls)
+
+        self.setting_verify = QCheckBox("Verify every transfer with a SHA-256 checksum")
+        self.setting_verify.setChecked(True)
+        self.setting_verify.setEnabled(False)
+        self.setting_verify.setToolTip("Always on: LanLink will not publish a file that fails its checksum.")
+        form.addRow("Transfers:", self.setting_verify)
         layout.addLayout(form)
 
         note = QLabel(
-            "LanLink uses plain HTTP on the local network. Use it on networks you trust; "
-            "TLS and QR pairing arrive in the next phase."
+            "Each device has its own certificate. Peers pin it when they pair, so an "
+            "attacker who takes over the address cannot impersonate a paired device. "
+            "Turning TLS off is for troubleshooting on a network you fully control."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color: #8a5b00;")
+        note.setStyleSheet("color: #5c6473;")
         layout.addWidget(note)
 
         row = QHBoxLayout()
@@ -507,8 +562,39 @@ class MainWindow(QMainWindow):
 
     def _tick_slow(self) -> None:
         self.health.expire()
+        self._check_network_change()
         self.refresh_devices()
         self.probe_devices()
+
+    def _check_network_change(self) -> None:
+        """Rebind after a Wi-Fi switch, a sleep/wake, or a new DHCP lease."""
+        addresses = local_ipv4_address_strings()
+        if addresses == self._addresses:
+            return
+        self._addresses = addresses
+        self.status_line.showMessage("Network changed — reconnecting LanLink…", 6000)
+
+        def rebind() -> bool:
+            return self.service.restart()
+
+        def rebound(ok: object) -> None:
+            self._addresses = local_ipv4_address_strings()
+            for client in self._clients.values():
+                client.close()
+            self._clients.clear()
+            self.health.statuses.clear()
+            self.health.errors.clear()
+            self.discovery.stop()
+            self.discovery.start()
+            self.refresh_my_device()
+            self.refresh_devices()
+            self.status_line.showMessage(
+                f"Reconnected on {self.service.url}" if ok else
+                f"Could not rebind: {self.service.last_error}",
+                8000,
+            )
+
+        self.runner.run(rebind, rebound, self._show_error)
 
     # ------------------------------------------------------------------ shared
 
@@ -516,12 +602,20 @@ class MainWindow(QMainWindow):
         remote = self.state.get_remote_device(device.id)
         address = getattr(device, "address", "") or (remote.base_url if remote else "")
         token = remote.token if remote else None
+        certificate = remote.certificate if remote else None
         client = self._clients.get(device.id)
-        if client is None or client.base_url != address.rstrip("/") or client.token != token:
+        stale = (
+            client is None
+            or client.base_url != address.rstrip("/")
+            or client.token != token
+            or client.peer_certificate != certificate
+        )
+        if stale:
             if client is not None:
                 client.close()
-            client = LanLinkClient(address, token=token)
+            client = LanLinkClient(address, token=token, peer_certificate=certificate)
             self._clients[device.id] = client
+        assert client is not None
         return client
 
     def _show_error(self, message: str) -> None:
@@ -554,6 +648,12 @@ class MainWindow(QMainWindow):
         running = self.service.thread is not None and self.service.thread.is_alive()
         self.my_status.setText("\U0001f7e2  Online and sharing" if running else "\U0001f534  Not running")
         self.my_id.setText(device["id"])
+        certificate = self.service.certificate
+        if certificate is not None:
+            protection = "protected by Windows" if secrets_are_protected() else "owner-only file"
+            self.my_fingerprint.setText(f"{certificate.short_fingerprint}   (keys {protection})")
+        else:
+            self.my_fingerprint.setText("TLS is off — this device is serving plain HTTP.")
 
     def refresh_pairing_panel(self) -> None:
         current = self.state.pairing_code()
@@ -563,6 +663,9 @@ class MainWindow(QMainWindow):
                 "Pairing is off. Nobody can pair with this device until you switch it on."
             )
             self.pairing_button.setText("Allow a device to pair")
+            self.copy_invite_button.setEnabled(False)
+            self.qr_label.clear_code("Pairing is off")
+            self._invite = None
             return
         code, expires_at = current
         remaining = max(0, int(expires_at - time.time()))
@@ -572,6 +675,42 @@ class MainWindow(QMainWindow):
             "It works once, then pairing switches off again."
         )
         self.pairing_button.setText("Stop allowing pairing")
+        self.copy_invite_button.setEnabled(True)
+
+        invite = self.current_invite(code)
+        if self._invite is None or self._invite.to_url() != invite.to_url():
+            self._invite = invite
+            self.qr_label.set_payload(invite.to_url())
+
+    def current_invite(self, code: str) -> Invite:
+        addresses = local_ipv4_address_strings()
+        host = self.service.host if self.service.host not in {"0.0.0.0", "::"} else ""
+        if not host:
+            host = addresses[0] if addresses else "127.0.0.1"
+        certificate = self.service.certificate
+        return Invite(
+            host=host,
+            port=self.service.port,
+            code=code,
+            device_id=self.state.device_id,
+            name=self.state.device_name,
+            fingerprint=certificate.fingerprint if certificate else "",
+            scheme=self.service.scheme,
+        )
+
+    def copy_invite(self) -> None:
+        current = self.state.pairing_code()
+        if current is None:
+            return
+        from PySide6.QtWidgets import QApplication as _App
+
+        invite = self.current_invite(current[0])
+        clipboard = _App.clipboard()
+        if clipboard is not None:
+            clipboard.setText(invite.to_url())
+        self.status_line.showMessage(
+            "Invite link copied. Paste it into the other device's Devices page.", 8000
+        )
 
     def toggle_pairing(self) -> None:
         if self.state.pairing_armed:
@@ -633,8 +772,11 @@ class MainWindow(QMainWindow):
             self.health.mark_connecting(device.id)
             address, device_id = device.address, device.id
 
-            def check(url: str = address) -> dict:
-                probe = LanLinkClient(url)
+            remote = self.state.get_remote_device(device_id)
+            pin = remote.certificate if remote else None
+
+            def check(url: str = address, certificate: str | None = pin) -> dict:
+                probe = LanLinkClient(url, peer_certificate=certificate, timeout=5)
                 try:
                     return probe.device_info()
                 finally:
@@ -654,7 +796,12 @@ class MainWindow(QMainWindow):
 
     def _probe_failed(self, device_id: str, message: str) -> None:
         self._probing.discard(device_id)
-        self.health.mark_offline(device_id)
+        lowered = message.lower()
+        if "certificate" in lowered or "ssl" in lowered or "verify" in lowered:
+            # A pinned certificate that stopped matching is not "offline" — say so.
+            self.health.mark_error(device_id, "Certificate mismatch — refusing to connect")
+        else:
+            self.health.mark_offline(device_id)
 
     def _selected_device(self) -> UnifiedDevice | None:
         index = self.device_view.currentIndex()
@@ -670,35 +817,60 @@ class MainWindow(QMainWindow):
         if not device.address:
             self._warn("No address", f"LanLink does not know an address for {device.name} yet.")
             return
-        self._pair_with(device.address)
+        try:
+            invite = parse_invite(device.address)
+        except InvalidInvite as error:
+            self._warn("Bad address", str(error))
+            return
+        invite.fingerprint = device.fingerprint
+        invite.name = device.name
+        self._pair_with(invite)
 
     def pair_manual_address(self) -> None:
-        address = self.manual_address.text().strip()
-        if not address:
-            self._warn("No address", "Type the other device's address first.")
+        try:
+            invite = parse_invite(self.manual_address.text())
+        except InvalidInvite as error:
+            self._warn("Cannot use that", str(error))
             return
-        if "://" not in address:
-            address = f"http://{address}"
-        self._pair_with(address.rstrip("/"))
+        self._pair_with(invite)
 
-    def _pair_with(self, address: str) -> None:
-        code, accepted = QInputDialog.getText(
-            self,
-            "Pair with device",
-            f"Switch on pairing on the other device, then enter its 8-digit code.\n\n{address}",
-        )
-        if not accepted or not code.strip():
-            return
+    def _pair_with(self, invite: Invite) -> None:
+        code = invite.code
+        if not code:
+            entered, accepted = QInputDialog.getText(
+                self,
+                "Pair with device",
+                "Switch on pairing on the other device, then enter its 8-digit code."
+                f"\n\n{invite.base_url}",
+            )
+            if not accepted or not entered.strip():
+                return
+            code = entered.strip()
 
-        client = LanLinkClient(address)
+        host, port, scheme = invite.host, invite.port, invite.scheme
+        expected = invite.fingerprint
+        address = invite.base_url
         device_name = self.state.device_name
         device_id = self.state.device_id
 
         def do_pair() -> dict:
+            certificate = ""
+            if scheme == "https":
+                certificate = fetch_peer_certificate(host, port)
+                actual = fingerprint_of_pem(certificate)
+                # A truncated fingerprint from mDNS still narrows identity usefully.
+                if expected and not actual.startswith(expected.lower()):
+                    raise RuntimeError(
+                        "The certificate this device presented does not match the one it "
+                        "advertised. Do not continue on this network."
+                    )
+            client = LanLinkClient(address, peer_certificate=certificate or None)
             try:
-                return client.pair(device_name, code.strip(), client_id=device_id)
+                result = client.pair(device_name, code, client_id=device_id)
             finally:
                 client.close()
+            result["certificate"] = certificate
+            return result
 
         self.status_line.showMessage(f"Pairing with {address}…")
         self.runner.run(
@@ -709,8 +881,22 @@ class MainWindow(QMainWindow):
 
     def _pair_ok(self, address: str, result: dict) -> None:
         device = result["device"]
-        saved = self.state.upsert_remote_device(device["id"], device["name"], address, result["token"])
+        certificate = result.get("certificate", "")
+        fingerprint = fingerprint_of_pem(certificate) if certificate else ""
+        saved = self.state.upsert_remote_device(
+            device["id"], device["name"], address, result["token"], certificate, fingerprint
+        )
         self.manual_address.clear()
+        self._clients.pop(saved.id, None)
+        if fingerprint:
+            QMessageBox.information(
+                self,
+                "Paired",
+                f"Paired with {saved.name}.\n\nIts certificate fingerprint is:\n"
+                f"{short_fingerprint(fingerprint)}\n\n"
+                "Check it matches the fingerprint shown on that device's My Device page. "
+                "LanLink will refuse to connect if it ever changes.",
+            )
         self.status_line.showMessage(f"Paired with {saved.name}", 6000)
         self.refresh_devices()
 
@@ -1297,7 +1483,16 @@ class MainWindow(QMainWindow):
         self.state.set_device_name(self.setting_name.text())
         self.state.max_upload_bytes = self.setting_limit.value() * 1024 * 1024
         self.state.bind_all_interfaces = self.setting_bind_all.isChecked()
+        tls_changed = self.state.use_tls != self.setting_tls.isChecked()
+        self.state.use_tls = self.setting_tls.isChecked()
         self.state._save()
+        if tls_changed:
+            QMessageBox.information(
+                self,
+                "Restart needed",
+                "The connection security change applies when LanLink restarts. "
+                "Devices paired under the old setting will need to pair again.",
+            )
         self.refresh_my_device()
         self.status_line.showMessage(
             "Settings saved. Network changes apply the next time LanLink starts.", 8000

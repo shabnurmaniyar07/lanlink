@@ -1,26 +1,57 @@
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from .files import (
     FileAccessError,
+    checksum,
     copy_or_move,
     create_folder,
     delete_entry,
     destination_for_upload,
+    finalize_upload,
     get_file,
     list_folder,
+    partial_for,
     properties,
     rename_entry,
+    resumable_state,
 )
 from .models import CopyMoveRequest, CreateFolderRequest, PairRequest, RenameRequest
 from .state import PERM_DELETE, PERM_READ, PERM_WRITE, HubState, PairedDevice
 
 UPLOAD_CHUNK = 1024 * 1024
+DOWNLOAD_CHUNK = 512 * 1024
+
+
+def parse_range(header: str | None, total: int) -> int | None:
+    """Return the start offset of a simple ``bytes=N-`` request, else None."""
+    if not header or not header.strip().lower().startswith("bytes="):
+        return None
+    spec = header.split("=", 1)[1].strip()
+    if "," in spec:
+        return None  # multi-range is not something LanLink ever asks for
+    start_text = spec.split("-", 1)[0].strip()
+    if not start_text:
+        return None  # suffix ranges ("-500") are not used either
+    try:
+        start = int(start_text)
+    except ValueError:
+        return None
+    return start if start >= 0 else None
+
+
+def iter_file_from(path: Any, start: int) -> Iterator[bytes]:
+    with open(path, "rb") as handle:
+        handle.seek(start)
+        while block := handle.read(DOWNLOAD_CHUNK):
+            yield block
 
 # HTTP status per pairing outcome. Distinct codes let a native client explain itself.
 PAIR_FAILURE_STATUS = {
@@ -115,12 +146,46 @@ def create_app(state: HubState) -> FastAPI:
         share_id: str,
         path: str = Query(...),
         caller: PairedDevice = Depends(require_pairing),
-    ) -> FileResponse:
+        range_header: str | None = Header(default=None, alias="Range"),
+    ) -> Response:
         try:
             item = get_file(state, share_id, path)
         except FileAccessError as error:
             raise file_error(error) from error
-        return FileResponse(item, filename=item.name)
+
+        total = item.stat().st_size
+        start = parse_range(range_header, total)
+        if start is None:
+            return FileResponse(item, filename=item.name)
+        if start >= total:
+            raise HTTPException(
+                status_code=416,
+                detail="The requested range is past the end of the file.",
+                headers={"Content-Range": f"bytes */{total}"},
+            )
+        # Resume: stream from the offset the client already has.
+        return StreamingResponse(
+            iter_file_from(item, start),
+            status_code=206,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Range": f"bytes {start}-{total - 1}/{total}",
+                "Content-Length": str(total - start),
+                "Accept-Ranges": "bytes",
+                "Content-Disposition": f'attachment; filename="{item.name}"',
+            },
+        )
+
+    @app.get("/v1/shares/{share_id}/checksum")
+    def file_checksum(
+        share_id: str,
+        path: str = Query(...),
+        caller: PairedDevice = Depends(require_pairing),
+    ) -> dict:
+        try:
+            return {"sha256": checksum(state, share_id, path), "path": path}
+        except FileAccessError as error:
+            raise file_error(error) from error
 
     @app.post("/v1/uploads/{share_id}")
     async def upload(
@@ -162,18 +227,36 @@ def create_app(state: HubState) -> FastAPI:
             await file.close()
         return {"path": target.name, "bytes": target.stat().st_size}
 
+    @app.get("/v1/shares/{share_id}/partial")
+    def partial_status(
+        share_id: str,
+        name: str = Query(...),
+        path: str = Query(default=""),
+        caller: PairedDevice = Depends(require_pairing),
+    ) -> dict:
+        """How many bytes of an interrupted upload survived, so it can resume."""
+        try:
+            return resumable_state(state, share_id, path, name)
+        except FileAccessError as error:
+            raise file_error(error) from error
+
     @app.put("/v1/files/{share_id}")
     async def stream_upload(
         share_id: str,
         request: Request,
         path: str = Query(default=""),
         name: str = Query(...),
+        offset: int = Query(default=0, ge=0),
+        finalize: bool = Query(default=True),
+        sha256: str | None = Query(default=None),
         caller: PairedDevice = Depends(require_pairing),
     ) -> dict:
-        """Raw streaming upload. Used by hub-mediated node-to-node transfers.
+        """Raw resumable upload; never buffers a whole file.
 
-        Unlike the multipart endpoint this never buffers a whole file, so a relay
-        can pipe a remote download straight into a remote upload.
+        Bytes land in a ``.lanlink-part`` sidecar. Only once the transfer
+        completes (and matches its checksum, when one is supplied) does the file
+        appear under its real name — so an interrupted transfer can never be
+        mistaken for a finished one.
         """
         writable(share_id)
         try:
@@ -181,12 +264,27 @@ def create_app(state: HubState) -> FastAPI:
         except FileAccessError as error:
             raise file_error(error) from error
 
+        if target.exists():
+            raise HTTPException(status_code=409, detail="A file with this name already exists.")
+
+        partial = partial_for(target)
+        existing = partial.stat().st_size if partial.exists() else 0
+        if offset > existing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"This device holds {existing} bytes; resume from there.",
+                headers={"X-LanLink-Received": str(existing)},
+            )
+        if offset < existing:
+            # The sender rewound: truncate so the bytes always line up.
+            with partial.open("r+b") as handle:
+                handle.truncate(offset)
+
         limit = state.max_upload_bytes
-        written = 0
-        created = False
+        written = offset
         try:
-            with target.open("xb") as output:
-                created = True
+            with partial.open("r+b" if partial.exists() else "wb") as output:
+                output.seek(offset)
                 async for block in request.stream():
                     if not block:
                         continue
@@ -197,15 +295,41 @@ def create_app(state: HubState) -> FastAPI:
                             detail=f"This file is larger than the {limit} byte upload limit.",
                         )
                     output.write(block)
-        except FileExistsError as error:
-            raise HTTPException(
-                status_code=409, detail="A file with this name already exists."
-            ) from error
-        except BaseException:
-            if created:
-                _discard(target)
+        except HTTPException:
+            _discard(partial)
             raise
-        return {"path": target.name, "bytes": target.stat().st_size}
+        except BaseException:
+            # Keep the part file: an interrupted transfer is meant to resume.
+            raise
+
+        if not finalize:
+            return {"path": name, "received": written, "complete": False}
+
+        try:
+            final = finalize_upload(state, share_id, path, name, sha256)
+        except FileAccessError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return {
+            "path": final.name,
+            "bytes": final.stat().st_size,
+            "received": written,
+            "complete": True,
+        }
+
+    @app.post("/v1/shares/{share_id}/finalize")
+    def finalize(
+        share_id: str,
+        name: str = Query(...),
+        path: str = Query(default=""),
+        sha256: str | None = Query(default=None),
+        caller: PairedDevice = Depends(require_pairing),
+    ) -> dict:
+        writable(share_id)
+        try:
+            final = finalize_upload(state, share_id, path, name, sha256)
+        except FileAccessError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return {"path": final.name, "bytes": final.stat().st_size, "complete": True}
 
     @app.post("/v1/shares/{share_id}/folders")
     def make_folder(

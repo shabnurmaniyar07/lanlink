@@ -20,6 +20,12 @@ dependency. Discovery uses mDNS (`_lanlink._tcp.local.`) with a manual address a
 
 **Network membership is never authorization.**
 
+- Every connection is TLS. Each device generates its own certificate on first run;
+  peers **pin** that exact certificate when they pair. There is no certificate
+  authority — the pinned certificate *is* the device identity, so an attacker who
+  takes over the address cannot impersonate a paired device. LanLink refuses to
+  connect if a pinned certificate ever changes.
+
 - Only folders the owner explicitly adds are reachable. Whole disks are never exposed.
 - Pairing mode is **off by default**. No pairing code exists until the local owner switches it on.
 - A code is 8 digits, expires after 120 seconds, is single-use, and is rate limited per source.
@@ -58,13 +64,16 @@ Then:
 
 Windows may ask whether Python can communicate on private networks — allow **Private networks**
 only. LanLink binds this machine's LAN address by default, so VPN and public adapters stay
-untouched; pass `--bind-all` to override.
+untouched; pass `--bind-all` to override. If the machine changes network or wakes from sleep,
+LanLink notices the new address and rebinds itself.
 
 Headless node:
 
 ```powershell
 python -m lanlink.server --share "C:\LanLink\Shared" --pair
 ```
+
+It prints its certificate fingerprint at startup so you can verify it from the other device.
 
 ## API surface (internal transport, `/v1`)
 
@@ -74,8 +83,12 @@ python -m lanlink.server --share "C:\LanLink\Shared" --pair
 | `POST /v1/pair` | Exchange a code for a device token (409 not armed, 429 throttled, 403 wrong) |
 | `GET /v1/shares` | List approved shares with permissions and availability |
 | `GET /v1/shares/{id}/list?path=` | Browse a folder inside a share |
-| `GET /v1/files/{id}?path=` | Stream one file |
-| `POST /v1/uploads/{id}?path=` | Upload without overwriting |
+| `GET /v1/files/{id}?path=` | Stream one file; honours `Range:` for resume |
+| `PUT /v1/files/{id}?path=&name=&offset=` | Resumable streaming upload |
+| `GET /v1/shares/{id}/partial?name=` | How many bytes of an interrupted upload survived |
+| `POST /v1/shares/{id}/finalize?name=&sha256=` | Verify and publish a completed upload |
+| `GET /v1/shares/{id}/checksum?path=` | SHA-256 of one file |
+| `POST /v1/uploads/{id}?path=` | Multipart upload without overwriting |
 | `POST /v1/operations` | Copy or move between local shares |
 | `DELETE /v1/pairings/{id}` | Self-unpair only |
 
@@ -84,25 +97,28 @@ All endpoints except `/health`, `/v1/device` and `/v1/pair` require `X-LanLink-T
 ## Development
 
 ```bash
-python -m pytest      # 92 tests
+python -m pytest      # 252 tests
 python -m ruff check .
 python -m mypy
 ```
 
-Phase status: **0 and 1 complete.** See `docs/current_state.md` for the audit this work is based
-on. Next: Phase 2 — rename/delete/mkdir/properties, per-share permissions, remote-to-remote
-transfers.
+Phase status: **0 through 4 complete.** See `docs/current_state.md` for the audit this
+work is based on. Next: Phase 5 — the native Kotlin Android client.
 
 ## Project layout
 
 ```text
 src/lanlink/
   api.py        internal /v1 transport (never a user interface)
-  client.py     reusable peer client for desktop and future Android nodes
-  desktop.py    PySide6 window (full rewrite due in Phase 3)
+  client.py     reusable peer client, with certificate pinning
+  crypto.py     device certificates, fingerprint pinning, credential sealing
+  desktop.py    application entry point
   discovery.py  mDNS advertise/browse over one shared Zeroconf instance
   files.py      share-root sandbox, filename validation, file operations
-  server.py     background service, interface/port selection, headless entry point
+  invite.py     lanlink:// pairing invites and QR payloads
+  server.py     TLS service, interface/port selection, network-change recovery
   state.py      atomic persistence, identity, shares, pairing
-tests/          92 tests incl. regressions for every audited defect
+  transfers.py  queue, progress, cancel/retry, resume, relay between two nodes
+  ui/           native PySide6 interface (models, widgets, main window)
+tests/          252 tests incl. regressions for every audited defect
 ```

@@ -55,7 +55,7 @@ def nearby(device_id: str, name: str, host: str = "192.168.1.50") -> NearbyDevic
     )
 
 
-def remote(device_id: str, name: str, url: str = "http://192.168.1.50:8765") -> RemoteDevice:
+def remote(device_id: str, name: str, url: str = "https://192.168.1.50:8765") -> RemoteDevice:
     return RemoteDevice(id=device_id, name=name, base_url=url, token="t", paired_at=1.0)
 
 
@@ -77,7 +77,7 @@ def test_one_device_from_three_sources_is_one_row() -> None:
 def test_distinct_devices_stay_separate() -> None:
     devices = merge_devices(
         [nearby("dev-1", "Office PC"), nearby("dev-2", "Design PC", "192.168.1.51")],
-        [remote("dev-3", "Laptop", "http://192.168.1.52:8765")],
+        [remote("dev-3", "Laptop", "https://192.168.1.52:8765")],
         [],
     )
     assert {device.id for device in devices} == {"dev-1", "dev-2", "dev-3"}
@@ -86,11 +86,13 @@ def test_distinct_devices_stay_separate() -> None:
 def test_ip_change_updates_address_without_splitting_identity() -> None:
     devices = merge_devices(
         [nearby("dev-1", "Office PC", "192.168.1.99")],
-        [remote("dev-1", "Office PC", "http://192.168.1.50:8765")],
+        [remote("dev-1", "Office PC", "https://192.168.1.50:8765")],
         [],
     )
     assert len(devices) == 1
-    assert devices[0].address == "http://192.168.1.99:8765", "mDNS address must win after a DHCP change"
+    assert devices[0].address == "https://192.168.1.99:8765", (
+        "the mDNS address must win after a DHCP change"
+    )
 
 
 def test_paired_only_device_is_offline_without_discovery() -> None:

@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import __version__
+from .crypto import protect_secret, unprotect_secret
 
 SETTINGS_MODE = 0o600
 PAIR_CODE_DIGITS = 8
@@ -113,6 +114,8 @@ class RemoteDevice:
     base_url: str
     token: str
     paired_at: float
+    certificate: str = ""  # pinned PEM; empty means a plain-HTTP legacy peer
+    fingerprint: str = ""
 
 
 @dataclass
@@ -141,6 +144,8 @@ class HubState:
         self.remote_devices: dict[str, RemoteDevice] = {}
         self.max_upload_bytes = 0  # 0 == unlimited
         self.bind_all_interfaces = False
+        self.use_tls = True
+        self.certificate_fingerprint = ""
         self.recovered_from_backup = False
         # Optional hook so a UI can require an explicit per-request approval.
         self.approval_callback: Callable[[str, str], bool] | None = None
@@ -186,6 +191,7 @@ class HubState:
         self.device_name = saved.get("device_name") or socket.gethostname() or "LanLink computer"
         self.max_upload_bytes = int(saved.get("max_upload_bytes", 0))
         self.bind_all_interfaces = bool(saved.get("bind_all_interfaces", False))
+        self.use_tls = bool(saved.get("use_tls", True))
 
         for item in saved.get("shares", []):
             try:
@@ -220,8 +226,10 @@ class HubState:
                     id=item["id"],
                     name=item["name"],
                     base_url=item["base_url"],
-                    token=item["token"],
+                    token=unprotect_secret(item["token"]),
                     paired_at=float(item["paired_at"]),
+                    certificate=item.get("certificate", ""),
+                    fingerprint=item.get("fingerprint", ""),
                 )
             except (KeyError, TypeError, ValueError):
                 continue
@@ -237,9 +245,13 @@ class HubState:
             "device_name": self.device_name,
             "max_upload_bytes": self.max_upload_bytes,
             "bind_all_interfaces": self.bind_all_interfaces,
+            "use_tls": self.use_tls,
             "shares": [asdict(share) for share in self.shares.values()],
             "paired_devices": [asdict(device) for device in self.paired_devices.values()],
-            "remote_devices": [asdict(device) for device in self.remote_devices.values()],
+            "remote_devices": [
+                {**asdict(device), "token": protect_secret(device.token)}
+                for device in self.remote_devices.values()
+            ],
         }
         atomic_write_text(self.settings_path, json.dumps(payload, indent=2))
 
@@ -358,7 +370,15 @@ class HubState:
 
     # --------------------------------------------------------- remote devices
 
-    def upsert_remote_device(self, device_id: str, name: str, base_url: str, token: str) -> RemoteDevice:
+    def upsert_remote_device(
+        self,
+        device_id: str,
+        name: str,
+        base_url: str,
+        token: str,
+        certificate: str = "",
+        fingerprint: str = "",
+    ) -> RemoteDevice:
         with self._lock:
             device = RemoteDevice(
                 id=device_id,
@@ -366,6 +386,8 @@ class HubState:
                 base_url=base_url.rstrip("/"),
                 token=token,
                 paired_at=time.time(),
+                certificate=certificate,
+                fingerprint=fingerprint,
             )
             self.remote_devices[device.id] = device
             self._save()
@@ -443,4 +465,5 @@ class HubState:
             "hostname": socket.gethostname(),
             "platform": platform.system(),
             "version": __version__,
+            "fingerprint": self.certificate_fingerprint,
         }

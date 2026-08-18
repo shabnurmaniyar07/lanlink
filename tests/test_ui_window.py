@@ -21,6 +21,11 @@ from lanlink.state import HubState  # noqa: E402
 from lanlink.ui import main_window as mw  # noqa: E402
 
 
+class FakeCertificate:
+    fingerprint = "a" * 64
+    short_fingerprint = "AAAA AAAA AAAA AAAA"
+
+
 class FakeService:
     def __init__(self, state, port=8765, host=None):
         self.state = state
@@ -29,6 +34,8 @@ class FakeService:
         self.last_error = None
         self.thread = None
         self.started = False
+        self.certificate = FakeCertificate()
+        self.scheme = "https"
 
     def start(self):
         self.started = True
@@ -36,7 +43,13 @@ class FakeService:
 
     @property
     def url(self):
-        return "http://127.0.0.1:8765"
+        return "https://127.0.0.1:8765"
+
+    def address_changed(self):
+        return False
+
+    def restart(self):
+        return True
 
     def stop(self):
         self.started = False
@@ -129,6 +142,7 @@ def test_my_device_page_shows_identity(window) -> None:
     window.refresh_my_device()
     assert window.state.device_id in window.my_id.text()
     assert "127.0.0.1" in window.my_address.text()
+    assert "AAAA AAAA" in window.my_fingerprint.text()
 
 
 def test_shares_page_lists_shares_and_permissions(window) -> None:
@@ -329,3 +343,89 @@ def test_alignment_role_on_size_column(window) -> None:
     window.entry_model.set_entries([{"name": "a", "kind": "file", "path": "a", "size": 10}])
     value = window.entry_model.data(window.entry_model.index(0, 1), Qt.ItemDataRole.TextAlignmentRole)
     assert value is not None
+
+
+# ----------------------------------------------------------------- Phase 4 UI
+
+
+def test_qr_and_invite_appear_only_while_pairing(window) -> None:
+    assert window.copy_invite_button.isEnabled() is False
+    assert window.qr_label.pixmap().isNull()
+
+    window.toggle_pairing()
+    window.refresh_pairing_panel()
+    assert window.copy_invite_button.isEnabled() is True
+    assert not window.qr_label.pixmap().isNull(), "an armed device must show a scannable invite"
+
+    window.toggle_pairing()
+    window.refresh_pairing_panel()
+    assert window.copy_invite_button.isEnabled() is False
+    assert window.qr_label.pixmap().isNull()
+
+
+def test_invite_carries_the_certificate_fingerprint(window) -> None:
+    from lanlink.invite import parse_invite
+
+    code, _ = window.state.start_pairing()
+    invite = window.current_invite(code)
+    parsed = parse_invite(invite.to_url())
+
+    assert parsed.code == code
+    assert parsed.device_id == window.state.device_id
+    assert parsed.fingerprint == window.service.certificate.fingerprint
+    assert parsed.scheme == "https"
+    assert parsed.port == window.service.port
+
+
+def test_copy_invite_puts_a_link_on_the_clipboard(window) -> None:
+    window.state.start_pairing()
+    window.copy_invite()
+    assert QApplication.clipboard().text().startswith("lanlink://pair?")
+
+
+def test_pasting_an_invite_prefills_pairing(window, monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(window, "_pair_with", lambda invite: captured.update({"invite": invite}))
+    window.manual_address.setText("lanlink://pair?host=10.0.0.9&port=8765&code=11223344&fp=abc")
+    window.pair_manual_address()
+
+    invite = captured["invite"]
+    assert invite.host == "10.0.0.9"
+    assert invite.code == "11223344"
+    assert invite.fingerprint == "abc"
+
+
+def test_a_bad_invite_is_reported_not_swallowed(window, monkeypatch) -> None:
+    warnings = []
+    monkeypatch.setattr(window, "_warn", lambda title, message: warnings.append(title))
+    window.manual_address.setText("not-an-address://")
+    window.pair_manual_address()
+    assert warnings == ["Cannot use that"]
+
+
+def test_certificate_mismatch_is_an_error_not_offline(window) -> None:
+    window._probe_failed("dev-1", "certificate verify failed: self signed certificate")
+    assert window.health.statuses["dev-1"] is mw.DeviceStatus.ERROR
+    assert "Certificate mismatch" in window.health.errors["dev-1"]
+
+    window._probe_failed("dev-2", "All connection attempts failed")
+    assert window.health.statuses["dev-2"] is mw.DeviceStatus.OFFLINE
+
+
+def test_transfer_bridge_marshals_progress_to_the_gui_thread(window) -> None:
+    ticks = []
+    window.bridge.changed.connect(lambda: ticks.append(1))
+    window.bridge.notify(None)
+    QApplication.processEvents()
+    assert ticks, "worker-thread progress must reach the UI without polling"
+
+
+def test_pinned_devices_say_so(window) -> None:
+    device = mw.UnifiedDevice(id="d1", name="PC", address="https://x", paired_out=True, pinned=True)
+    assert "certificate pinned" in device.detail
+
+
+def test_settings_expose_the_tls_switch(window) -> None:
+    assert window.setting_tls.isChecked() is True
+    assert window.setting_verify.isChecked() is True
+    assert window.setting_verify.isEnabled() is False, "checksum verification is not optional"

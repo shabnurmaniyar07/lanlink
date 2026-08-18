@@ -9,6 +9,7 @@ from pathlib import Path
 import uvicorn
 
 from .api import create_app
+from .crypto import DeviceCertificate, ensure_device_certificate
 from .discovery import DiscoveryService, local_ipv4_address_strings
 from .state import HubState
 
@@ -42,12 +43,12 @@ def choose_port(host: str, preferred: int = DEFAULT_PORT, attempts: int = PORT_A
     raise OSError(f"No free port in {preferred}-{preferred + attempts - 1} on {host}.")
 
 
-def reachable_address(port: int, host: str | None = None) -> str:
+def reachable_address(port: int, host: str | None = None, scheme: str = "https") -> str:
     """Show a likely LAN URL without requiring an internet connection."""
     if host and host not in {"0.0.0.0", "::"}:
-        return f"http://{host}:{port}"
+        return f"{scheme}://{host}:{port}"
     addresses = local_ipv4_address_strings()
-    return f"http://{addresses[0] if addresses else '127.0.0.1'}:{port}"
+    return f"{scheme}://{addresses[0] if addresses else '127.0.0.1'}:{port}"
 
 
 class LocalService:
@@ -61,6 +62,25 @@ class LocalService:
         self.discovery: DiscoveryService | None = None
         self.last_error: str | None = None
         self.server: uvicorn.Server | None = None
+        self.certificate: DeviceCertificate | None = None
+        self._addresses = local_ipv4_address_strings()
+
+    @property
+    def scheme(self) -> str:
+        return "https" if self.state.use_tls else "http"
+
+    def _ensure_certificate(self) -> DeviceCertificate | None:
+        if not self.state.use_tls:
+            return None
+        if self.certificate is None:
+            self.certificate = ensure_device_certificate(
+                self.state.settings_path.parent,
+                self.state.device_id,
+                self.state.device_name,
+                local_ipv4_address_strings(),
+            )
+        self.state.certificate_fingerprint = self.certificate.fingerprint
+        return self.certificate
 
     def start(self) -> bool:
         if self.thread and self.thread.is_alive():
@@ -71,8 +91,19 @@ class LocalService:
             self.last_error = str(error)
             return False
 
+        try:
+            certificate = self._ensure_certificate()
+        except Exception as error:  # noqa: BLE001 - surfaced to the user
+            self.last_error = f"Could not prepare the device certificate: {error}"
+            return False
+
         config = uvicorn.Config(
-            create_app(self.state), host=self.host, port=self.port, log_level="warning"
+            create_app(self.state),
+            host=self.host,
+            port=self.port,
+            log_level="warning",
+            ssl_certfile=str(certificate.certificate_path) if certificate else None,
+            ssl_keyfile=str(certificate.key_path) if certificate else None,
         )
         self.server = uvicorn.Server(config)
         self.thread = threading.Thread(target=self.server.run, name="lanlink-api", daemon=True)
@@ -88,13 +119,26 @@ class LocalService:
             return False
 
         self.last_error = None
-        self.discovery = DiscoveryService(self.state, self.port)
+        self._addresses = local_ipv4_address_strings()
+        self.discovery = DiscoveryService(self.state, self.port, scheme=self.scheme)
         self.discovery.start()
         return True
 
     @property
     def url(self) -> str:
-        return reachable_address(self.port, self.host)
+        return reachable_address(self.port, self.host, self.scheme)
+
+    def address_changed(self) -> bool:
+        """True when this machine's LAN addresses differ from when we bound."""
+        return local_ipv4_address_strings() != self._addresses
+
+    def restart(self) -> bool:
+        """Rebind after a network change, sleep/wake, or an IP lease change."""
+        self.stop()
+        self.host = preferred_bind_host(self.state.bind_all_interfaces)
+        self.certificate = None  # the new address belongs in the certificate
+        self.port = DEFAULT_PORT
+        return self.start()
 
     def stop(self) -> None:
         if self.discovery:
@@ -118,9 +162,14 @@ def main() -> None:
         help="Bind every interface. Off by default so VPN/public adapters stay unexposed.",
     )
     parser.add_argument("--pair", action="store_true", help="Arm pairing mode at startup")
+    parser.add_argument(
+        "--no-tls", action="store_true", help="Serve plain HTTP (development on a trusted LAN only)"
+    )
     args = parser.parse_args()
 
     state = HubState()
+    if args.no_tls:
+        state.use_tls = False
     for folder in args.share:
         state.add_share(Path(folder))
     host = args.host or preferred_bind_host(args.bind_all or state.bind_all_interfaces)
@@ -130,6 +179,8 @@ def main() -> None:
         return
 
     print(f"LanLink Hub is ready at {service.url}")
+    if service.certificate is not None:
+        print(f"Certificate fingerprint: {service.certificate.short_fingerprint}")
     if args.pair:
         code, expires_at = state.start_pairing()
         print(f"Pairing code: {code} (valid for {int(expires_at - time.time())} seconds, one use)")

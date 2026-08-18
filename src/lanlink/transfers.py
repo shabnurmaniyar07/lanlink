@@ -19,6 +19,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from .client import LanLinkClient
+from .files import PART_SUFFIX, sha256_of
 
 CHUNK_SIZE = 512 * 1024
 _RATE_SMOOTHING = 0.3
@@ -295,46 +296,100 @@ class TransferManager:
         self._notify(transfer)
 
 
+
 # --------------------------------------------------------------------- runners
 
 
+def _verify(expected: str | None, actual: str, label: str) -> None:
+    if expected and expected.lower() != actual.lower():
+        raise RuntimeError(f"{label} failed its SHA-256 check and was discarded.")
+
+
 def download_runner(
-    manager: TransferManager, client: LanLinkClient, share_id: str, path: str, destination: Path
+    manager: TransferManager,
+    client: LanLinkClient,
+    share_id: str,
+    path: str,
+    destination: Path,
+    verify: bool = True,
 ) -> Callable[[Transfer, _Control], None]:
+    """Stream a remote file to disk, resuming a partial download if one exists."""
+
     def run(transfer: Transfer, control: _Control) -> None:
-        created = False
+        partial = destination.with_name(destination.name + PART_SUFFIX)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        resume_from = partial.stat().st_size if partial.exists() else 0
+        transfer.transferred = resume_from
+
+        expected = None
+        if verify:
+            try:
+                expected = client.checksum(share_id, path)
+            except Exception:  # noqa: BLE001 - an older peer may not offer checksums
+                expected = None
+
         try:
-            with client.open_stream(share_id, path) as response:
+            with client.open_stream(share_id, path, offset=resume_from) as response:
+                if response.status_code == 200 and resume_from:
+                    # The peer ignored the range: start over rather than corrupt.
+                    resume_from = 0
+                    transfer.transferred = 0
+                    partial.unlink(missing_ok=True)
                 length = response.headers.get("content-length")
-                if length and transfer.size is None:
-                    transfer.size = int(length)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                with destination.open("xb") as output:
-                    created = True
+                if length:
+                    transfer.size = resume_from + int(length)
+                with partial.open("ab" if resume_from else "wb") as output:
                     for chunk in response.iter_bytes(CHUNK_SIZE):
                         output.write(chunk)
                         manager.advance(transfer, control, len(chunk))
+        except TransferCancelled:
+            raise  # keep the part file so the user can retry where it stopped
         except BaseException:
-            if created:
-                destination.unlink(missing_ok=True)
             raise
+
+        if expected:
+            _verify(expected, sha256_of(partial), destination.name)
+        if destination.exists():
+            partial.unlink(missing_ok=True)
+            raise RuntimeError(f"{destination.name} already exists at the destination.")
+        partial.replace(destination)
 
     return run
 
 
 def upload_runner(
-    manager: TransferManager, client: LanLinkClient, share_id: str, folder: str, source: Path
+    manager: TransferManager,
+    client: LanLinkClient,
+    share_id: str,
+    folder: str,
+    source: Path,
+    verify: bool = True,
 ) -> Callable[[Transfer, _Control], None]:
+    """Send a local file, resuming from whatever the receiver already holds."""
+
     def run(transfer: Transfer, control: _Control) -> None:
         transfer.size = source.stat().st_size
+        digest = sha256_of(source) if verify else None
+
+        resume_from = 0
+        try:
+            status = client.partial_status(share_id, folder, source.name)
+            resume_from = int(status.get("received", 0))
+        except Exception:  # noqa: BLE001 - older peers have no resume endpoint
+            resume_from = 0
+        resume_from = min(resume_from, transfer.size)
+        transfer.transferred = resume_from
 
         def chunks() -> Iterator[bytes]:
             with source.open("rb") as handle:
+                handle.seek(resume_from)
                 while block := handle.read(CHUNK_SIZE):
                     manager.advance(transfer, control, len(block))
                     yield block
 
-        client.put_stream(share_id, folder, source.name, chunks())
+        client.put_stream(
+            share_id, folder, source.name, chunks(), offset=resume_from, sha256=digest
+        )
 
     return run
 
@@ -349,14 +404,33 @@ def relay_runner(
     destination_folder: str,
     name: str,
     delete_source: bool = False,
+    verify: bool = True,
 ) -> Callable[[Transfer, _Control], None]:
     """Stream node A -> hub -> node B without buffering the file on the hub."""
 
     def run(transfer: Transfer, control: _Control) -> None:
-        with source_client.open_stream(source_share_id, source_path) as response:
+        digest = None
+        if verify:
+            try:
+                digest = source_client.checksum(source_share_id, source_path)
+            except Exception:  # noqa: BLE001 - peer may predate checksums
+                digest = None
+
+        resume_from = 0
+        try:
+            status = destination_client.partial_status(destination_share_id, destination_folder, name)
+            resume_from = int(status.get("received", 0))
+        except Exception:  # noqa: BLE001
+            resume_from = 0
+        transfer.transferred = resume_from
+
+        with source_client.open_stream(source_share_id, source_path, offset=resume_from) as response:
+            if response.status_code == 200 and resume_from:
+                resume_from = 0
+                transfer.transferred = 0
             length = response.headers.get("content-length")
             if length:
-                transfer.size = int(length)
+                transfer.size = resume_from + int(length)
 
             def chunks() -> Iterator[bytes]:
                 for chunk in response.iter_bytes(CHUNK_SIZE):
@@ -364,11 +438,16 @@ def relay_runner(
                     yield chunk
 
             result = destination_client.put_stream(
-                destination_share_id, destination_folder, name, chunks()
+                destination_share_id,
+                destination_folder,
+                name,
+                chunks(),
+                offset=resume_from,
+                sha256=digest,
             )
 
         # Verify before touching the source. A move never deletes first.
-        if transfer.size is not None and result.get("bytes") != transfer.size:
+        if transfer.size is not None and result.get("bytes") not in (None, transfer.size):
             raise RuntimeError("The transfer could not be verified; the source was left untouched.")
         if delete_source:
             source_client.delete(source_share_id, source_path)

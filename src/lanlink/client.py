@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ssl
 import uuid
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
@@ -7,14 +8,36 @@ from pathlib import Path
 
 import httpx
 
+from .crypto import pinned_ssl_context
+
+
+class CertificateMismatch(RuntimeError):
+    """The peer presented a certificate other than the pinned one."""
+
 
 class LanLinkClient:
-    """Small reusable client for a desktop UI, Android app, or CLI peer."""
+    """Small reusable client for a desktop UI, Android app, or CLI peer.
 
-    def __init__(self, base_url: str, token: str | None = None) -> None:
+    When ``peer_certificate`` is supplied the connection trusts exactly that
+    certificate and nothing else — no certificate authority is involved.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        token: str | None = None,
+        peer_certificate: str | None = None,
+        timeout: float = 30.0,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
-        self.http = httpx.Client(timeout=httpx.Timeout(30, read=300))
+        self.peer_certificate = peer_certificate
+        verify: ssl.SSLContext | bool = True
+        if self.base_url.startswith("https://"):
+            # No pin yet means pairing is in flight; the pairing code is what
+            # authenticates that single exchange.
+            verify = pinned_ssl_context(peer_certificate) if peer_certificate else False
+        self.http = httpx.Client(timeout=httpx.Timeout(timeout, read=300), verify=verify)
 
     @property
     def headers(self) -> dict[str, str]:
@@ -85,29 +108,78 @@ class LanLinkClient:
         return destination
 
     @contextmanager
-    def open_stream(self, share_id: str, path: str) -> Iterator[httpx.Response]:
-        """Yield an open streaming response for a remote file, without buffering it."""
+    def open_stream(self, share_id: str, path: str, offset: int = 0) -> Iterator[httpx.Response]:
+        """Yield an open streaming response, optionally resuming from an offset."""
+        headers = dict(self.headers)
+        if offset:
+            headers["Range"] = f"bytes={offset}-"
         with self.http.stream(
             "GET",
             f"{self.base_url}/v1/files/{share_id}",
             params={"path": path},
-            headers=self.headers,
+            headers=headers,
         ) as response:
             response.raise_for_status()
             yield response
 
     def put_stream(
-        self, share_id: str, destination_folder: str, name: str, chunks: Iterable[bytes]
+        self,
+        share_id: str,
+        destination_folder: str,
+        name: str,
+        chunks: Iterable[bytes],
+        offset: int = 0,
+        finalize: bool = True,
+        sha256: str | None = None,
     ) -> dict:
         """Upload from an iterator so a relay never lands the file on the hub's disk."""
+        params: dict[str, str | int | bool] = {
+            "path": destination_folder,
+            "name": name,
+            "offset": offset,
+            "finalize": finalize,
+        }
+        if sha256:
+            params["sha256"] = sha256
         response = self.http.put(
             f"{self.base_url}/v1/files/{share_id}",
-            params={"path": destination_folder, "name": name},
+            params=params,
             headers={**self.headers, "Content-Type": "application/octet-stream"},
             content=chunks,
         )
         response.raise_for_status()
         return response.json()
+
+    def partial_status(self, share_id: str, destination_folder: str, name: str) -> dict:
+        response = self.http.get(
+            f"{self.base_url}/v1/shares/{share_id}/partial",
+            params={"path": destination_folder, "name": name},
+            headers=self.headers,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def finalize(
+        self, share_id: str, destination_folder: str, name: str, sha256: str | None = None
+    ) -> dict:
+        params: dict[str, str | int | bool] = {"path": destination_folder, "name": name}
+        if sha256:
+            params["sha256"] = sha256
+        response = self.http.post(
+            f"{self.base_url}/v1/shares/{share_id}/finalize", params=params, headers=self.headers
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def checksum(self, share_id: str, path: str) -> str:
+        response = self.http.get(
+            f"{self.base_url}/v1/shares/{share_id}/checksum",
+            params={"path": path},
+            headers=self.headers,
+            timeout=httpx.Timeout(30, read=600),
+        )
+        response.raise_for_status()
+        return str(response.json()["sha256"])
 
     def create_folder(self, share_id: str, path: str, name: str) -> dict:
         response = self.http.post(
