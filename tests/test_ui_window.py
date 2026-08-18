@@ -7,6 +7,7 @@ attribute or a signal wired to a slot that does not exist.
 from __future__ import annotations
 
 import os
+import threading
 
 import pytest
 
@@ -69,6 +70,30 @@ class FakeDiscovery:
 
     def devices(self):
         return list(self._devices)
+
+
+class _Request:
+    """Stand-in with PairingRequest's surface, driven synchronously."""
+
+    def __init__(self, attempt, block: bool = False) -> None:
+        self._attempt = attempt
+        self._block = block
+        self.cancelled = False
+        self.finished = False
+        self.waiting_for_peer = False
+        self.attempts = 0
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+    def run(self):
+        from lanlink.pairing_request import PairingRequest
+
+        inner = PairingRequest(self._attempt, timeout=5, interval=0.01)
+        outcome = inner.run()
+        self.attempts = inner.attempts
+        self.finished = True
+        return outcome
 
 
 def select_row(window, row: int) -> None:
@@ -429,3 +454,70 @@ def test_settings_expose_the_tls_switch(window) -> None:
     assert window.setting_tls.isChecked() is True
     assert window.setting_verify.isChecked() is True
     assert window.setting_verify.isEnabled() is False, "checksum verification is not optional"
+
+
+# ------------------------------------------------- pairing order (dialog side)
+
+
+def test_pairing_dialog_waits_instead_of_failing(window, monkeypatch) -> None:
+    """Pressing Pair before the other device arms must wait, not error out."""
+    import httpx
+
+    from lanlink.invite import Invite
+
+    calls = {"n": 0}
+
+    def attempt():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            request = httpx.Request("POST", "https://10.0.0.9:8765/v1/pair")
+            raise httpx.HTTPStatusError(
+                "not armed", request=request, response=httpx.Response(409, request=request)
+            )
+        return {"token": "t", "device": {"id": "dev-b", "name": "LAPTOP-B"}, "certificate": ""}
+
+    dialog = mw.PairingDialog(
+        Invite(host="10.0.0.9", port=8765, code="12345678", scheme="http"),
+        window.state,
+        window.runner,
+        window,
+    )
+    monkeypatch.setattr(mw, "PairingRequest", lambda _attempt, **_k: _Request(attempt))
+    dialog.start()
+    for _ in range(200):
+        QApplication.processEvents()
+        if dialog.result_payload:
+            break
+        threading.Event().wait(0.01)
+
+    assert calls["n"] == 3, "the dialog kept the request pending while the peer armed"
+    assert dialog.result_payload is not None
+    assert dialog.result_payload["device"]["name"] == "LAPTOP-B"
+    dialog.deleteLater()
+
+
+def test_pairing_dialog_rejects_a_short_code(window) -> None:
+    from lanlink.invite import Invite
+
+    dialog = mw.PairingDialog(
+        Invite(host="10.0.0.9", port=8765, code="", scheme="http"), window.state, window.runner, window
+    )
+    dialog.code_input.setText("123")
+    dialog.start()
+    assert dialog.request is None, "no request should leave the machine for a short code"
+    assert "8-digit" in dialog.status.text()
+    dialog.deleteLater()
+
+
+def test_pairing_dialog_cancel_stops_the_request(window) -> None:
+    from lanlink.invite import Invite
+
+    dialog = mw.PairingDialog(
+        Invite(host="10.0.0.9", port=8765, code="12345678", scheme="http"),
+        window.state,
+        window.runner,
+        window,
+    )
+    dialog.request = _Request(lambda: {}, block=True)
+    dialog.reject()
+    assert dialog.request.cancelled is True

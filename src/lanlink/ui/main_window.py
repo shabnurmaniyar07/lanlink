@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSpinBox,
     QSplitter,
@@ -38,6 +40,7 @@ from ..client import LanLinkClient
 from ..crypto import fetch_peer_certificate, fingerprint_of_pem, secrets_are_protected, short_fingerprint
 from ..discovery import DiscoveryBrowser, local_ipv4_address_strings
 from ..invite import InvalidInvite, Invite, parse_invite
+from ..pairing_request import PAIRING_WAIT_SECONDS, PairingOutcome, PairingRequest
 from ..server import LocalService
 from ..state import ALL_PERMISSIONS, HubState, RemoteDevice
 from ..transfers import (
@@ -148,6 +151,148 @@ class DestinationDialog(QDialog):
         self.selected_device = self.device_box.currentData()
         self.selected_share = self.share_box.currentData()
         super().accept()
+
+
+class PairingDialog(QDialog):
+    """Ask for the code and hold the request open while the peer arms.
+
+    Either order now works. If the other device is not in pairing mode yet the
+    request waits instead of failing, so the user can press "Allow a device to
+    pair" over there *after* starting here.
+    """
+
+    def __init__(
+        self, invite: Invite, state: HubState, runner: JobRunner, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Pair with device")
+        self.setMinimumWidth(460)
+        self.invite = invite
+        self.state = state
+        self.runner = runner
+        self.request: PairingRequest | None = None
+        self.result_payload: dict | None = None
+        self._deadline = 0.0
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(f"<b>{invite.base_url}</b>"))
+        explain = QLabel(
+            "On the other device open <b>My Device</b> and press "
+            "<b>Allow a device to pair</b>, then type its 8-digit code here.<br>"
+            "You can start waiting first — LanLink keeps trying until that device is ready."
+        )
+        explain.setWordWrap(True)
+        explain.setStyleSheet("color: #5c6473;")
+        layout.addWidget(explain)
+
+        form = QFormLayout()
+        self.code_input = QLineEdit(invite.code)
+        self.code_input.setPlaceholderText("8-digit code")
+        self.code_input.setMaxLength(8)
+        self.code_input.setValidator(QIntValidator(0, 99999999, self))
+        self.code_input.returnPressed.connect(self.start)
+        form.addRow("Pairing code:", self.code_input)
+        layout.addLayout(form)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)  # indeterminate
+        self.progress.hide()
+        layout.addWidget(self.progress)
+
+        self.status = QLabel("")
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+
+        buttons = QHBoxLayout()
+        self.pair_button = QPushButton("Pair")
+        self.pair_button.setDefault(True)
+        self.pair_button.clicked.connect(self.start)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        buttons.addStretch()
+        buttons.addWidget(self.cancel_button)
+        buttons.addWidget(self.pair_button)
+        layout.addLayout(buttons)
+
+        self.countdown = QTimer(self)
+        self.countdown.timeout.connect(self._tick)
+
+    def start(self) -> None:
+        code = self.code_input.text().strip()
+        if len(code) < 6:
+            self.status.setText("Enter the 8-digit code shown on the other device.")
+            return
+
+        invite = self.invite
+        host, port, scheme = invite.host, invite.port, invite.scheme
+        expected, address = invite.fingerprint, invite.base_url
+        device_name, device_id = self.state.device_name, self.state.device_id
+
+        def attempt() -> dict:
+            certificate = ""
+            if scheme == "https":
+                certificate = fetch_peer_certificate(host, port)
+                actual = fingerprint_of_pem(certificate)
+                # A truncated fingerprint from mDNS still narrows identity usefully.
+                if expected and not actual.startswith(expected.lower()):
+                    raise RuntimeError(
+                        "The certificate this device presented does not match the one it "
+                        "advertised. Do not continue on this network."
+                    )
+            client = LanLinkClient(address, peer_certificate=certificate or None)
+            try:
+                result = client.pair(device_name, code, client_id=device_id)
+            finally:
+                client.close()
+            result["certificate"] = certificate
+            return result
+
+        self.request = PairingRequest(attempt)
+        self._deadline = time.monotonic() + PAIRING_WAIT_SECONDS
+        self.code_input.setEnabled(False)
+        self.pair_button.setEnabled(False)
+        self.progress.show()
+        self.status.setText("Contacting the other device…")
+        self.countdown.start(500)
+        self.runner.run(self.request.run, self._finished, self._failed)
+
+    def _tick(self) -> None:
+        if self.request is None:
+            return
+        remaining = max(0, int(self._deadline - time.monotonic()))
+        if self.request.waiting_for_peer:
+            self.status.setText(
+                "Waiting for the other device to allow pairing… "
+                f"({remaining}s left)\n"
+                "Press <b>Allow a device to pair</b> on that device now."
+            )
+
+    def _stop(self) -> None:
+        self.countdown.stop()
+        self.progress.hide()
+        self.code_input.setEnabled(True)
+        self.pair_button.setEnabled(True)
+
+    def _finished(self, outcome: PairingOutcome) -> None:
+        self._stop()
+        if outcome.ok:
+            self.result_payload = outcome.result
+            self.accept()
+            return
+        if outcome.reason == "cancelled":
+            self.reject()
+            return
+        self.status.setText(outcome.message)
+
+    def _failed(self, message: str) -> None:
+        self._stop()
+        self.status.setText(message)
+
+    def reject(self) -> None:
+        if self.request is not None and not self.request.finished:
+            self.request.cancel()
+        self._stop()
+        super().reject()
 
 
 class MainWindow(QMainWindow):
@@ -838,49 +983,10 @@ class MainWindow(QMainWindow):
         self._pair_with(invite)
 
     def _pair_with(self, invite: Invite) -> None:
-        code = invite.code
-        if not code:
-            entered, accepted = QInputDialog.getText(
-                self,
-                "Pair with device",
-                "Switch on pairing on the other device, then enter its 8-digit code."
-                f"\n\n{invite.base_url}",
-            )
-            if not accepted or not entered.strip():
-                return
-            code = entered.strip()
-
-        host, port, scheme = invite.host, invite.port, invite.scheme
-        expected = invite.fingerprint
-        address = invite.base_url
-        device_name = self.state.device_name
-        device_id = self.state.device_id
-
-        def do_pair() -> dict:
-            certificate = ""
-            if scheme == "https":
-                certificate = fetch_peer_certificate(host, port)
-                actual = fingerprint_of_pem(certificate)
-                # A truncated fingerprint from mDNS still narrows identity usefully.
-                if expected and not actual.startswith(expected.lower()):
-                    raise RuntimeError(
-                        "The certificate this device presented does not match the one it "
-                        "advertised. Do not continue on this network."
-                    )
-            client = LanLinkClient(address, peer_certificate=certificate or None)
-            try:
-                result = client.pair(device_name, code, client_id=device_id)
-            finally:
-                client.close()
-            result["certificate"] = certificate
-            return result
-
-        self.status_line.showMessage(f"Pairing with {address}…")
-        self.runner.run(
-            do_pair,
-            lambda result: self._pair_ok(address, result),
-            lambda message: self._warn("Pairing failed", message),
-        )
+        """Open a pairing dialog that survives the other device arming late."""
+        dialog = PairingDialog(invite, self.state, self.runner, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.result_payload:
+            self._pair_ok(invite.base_url, dialog.result_payload)
 
     def _pair_ok(self, address: str, result: dict) -> None:
         device = result["device"]
