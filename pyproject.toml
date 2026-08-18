@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9"]
+dev = ["pytest>=8,<9", "ruff>=0.6,<1", "mypy>=1.11,<2"]
 
 [project.scripts]
 lanlink-hub = "lanlink.desktop:main"
@@ -33,3 +33,18 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 lanlink = ["static/*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["B008"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/lanlink"]
+ignore_missing_imports = true
+no_implicit_optional = true
