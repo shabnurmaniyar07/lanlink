@@ -39,11 +39,21 @@ dependency. Discovery uses mDNS (`_lanlink._tcp.local.`) with a manual address a
 - Uploads cannot overwrite, are size-capped, and never leave a partial file behind.
 - Over the network a device can only remove **its own** pairing. Revoking any other device is a
   local-owner action.
+- Every transfer is verified with SHA-256. A file that fails its checksum is discarded, never
+  published under its real name.
+- Interrupted transfers accumulate in a `.lanlink-part` sidecar and resume from where they
+  stopped. A partial file is never listed as a real one.
+- On Windows, stored credentials are sealed with DPAPI under the current user account.
 
-### Current limitation
+### Pairing with an invite
 
-Transport is still plain HTTP, intended for a trusted LAN or hotspot during development. TLS,
-certificate pinning and QR pairing land in Phase 4. Do not use this on public or untrusted Wi-Fi.
+Press **Allow a device to pair** on one device. It shows an 8-digit code and a QR code. Either
+scan the QR from a phone, or press **Copy invite link** and paste the `lanlink://pair?…` link into
+the other computer's Devices page. The invite carries the certificate fingerprint, so the
+receiving device pins the right identity rather than trusting whatever answers on that address.
+
+After pairing, compare the fingerprint LanLink shows with the one on the other device's
+**My Device** page. They should match exactly.
 
 ## Run it on Windows
 
@@ -55,12 +65,15 @@ py -3 -m venv .venv
 
 Then:
 
-1. **Add shared folder** and pick a folder.
+1. Open **Shared Folders** and add a folder. Set its access to read-only, read+write, or
+   read+write+delete — delete is opt-in.
 2. Put both machines on the same Wi-Fi, Ethernet or hotspot.
-3. On the receiving machine, open the **Remote browser** tab and enter the other machine's address.
-4. On the sharing machine, press **Allow a device to pair** and read out the 8-digit code.
-5. Enter that code on the receiving machine within 120 seconds.
-6. Browse the paired device's shared folders and files inside LanLink.
+3. On the sharing machine, open **My Device** and press **Allow a device to pair**.
+4. On the other machine, open **Devices**, select the discovered device and press
+   **Pair with selected device** — or paste the invite link.
+5. Enter the 8-digit code within 120 seconds and approve the request on the sharing machine.
+6. Double-click the device to browse its shared folders and files inside LanLink. Right-click any
+   file for download, upload, copy, move, rename, delete, new folder and properties.
 
 Windows may ask whether Python can communicate on private networks — allow **Private networks**
 only. LanLink binds this machine's LAN address by default, so VPN and public adapters stay
