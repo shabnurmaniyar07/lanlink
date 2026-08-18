@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lanlink-hub"
+version = "0.1.0"
+description = "Private local-network file-sharing hub for computers and phones"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.27,<1",
+  "python-multipart>=0.0.9,<1",
+  "PySide6>=6.7,<7",
+  "uvicorn[standard]>=0.30,<1",
+  "zeroconf>=0.136,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+
+[project.scripts]
+lanlink-hub = "lanlink.desktop:main"
+lanlink-node = "lanlink.server:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+lanlink = ["static/*"]
