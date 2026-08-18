@@ -110,10 +110,20 @@ All endpoints except `/health`, `/v1/device` and `/v1/pair` require `X-LanLink-T
 ## Development
 
 ```bash
-python -m pytest      # 252 tests
+python -m pytest      # 269 tests
 python -m ruff check .
 python -m mypy
 ```
+
+Running a second instance on one machine (useful for testing device-to-device
+features without a third computer):
+
+```powershell
+python -m lanlink.desktop --data-dir C:\LanLink\Second
+```
+
+It gets its own device identity, certificate and shares, and picks the next free
+port. `python -m lanlink.server --data-dir ...` does the same headless.
 
 Phase status: **0 through 4 complete.** See `docs/current_state.md` for the audit this
 work is based on. Next: Phase 5 — the native Kotlin Android client.
@@ -133,5 +143,7 @@ src/lanlink/
   state.py      atomic persistence, identity, shares, pairing
   transfers.py  queue, progress, cancel/retry, resume, relay between two nodes
   ui/           native PySide6 interface (models, widgets, main window)
-tests/          252 tests incl. regressions for every audited defect
+tests/          269 tests incl. regressions for every audited defect
+tools/          verify_transfer.py — end-to-end check against a real second device
+docs/           the audit, and the two-laptop test procedure
 ```

@@ -116,3 +116,28 @@ def test_malformed_entries_are_skipped_not_fatal(tmp_path: Path) -> None:
     state = HubState(settings)
     assert list(state.shares) == ["s2"]
     assert state.paired_devices == {}
+
+
+def test_data_dir_override_gives_a_separate_identity(tmp_path: Path, monkeypatch) -> None:
+    """A second instance on one machine must not share the first one's identity."""
+    from lanlink.state import DATA_DIR_ENV, app_data_dir
+
+    monkeypatch.setenv(DATA_DIR_ENV, str(tmp_path / "instance-one"))
+    first = HubState()
+    monkeypatch.setenv(DATA_DIR_ENV, str(tmp_path / "instance-two"))
+    second = HubState()
+
+    assert first.device_id != second.device_id
+    assert first.settings_path != second.settings_path
+    assert first.settings_path.exists() and second.settings_path.exists()
+
+    monkeypatch.setenv(DATA_DIR_ENV, str(tmp_path / "instance-one"))
+    assert app_data_dir() == tmp_path / "instance-one"
+    assert HubState().device_id == first.device_id, "the identity must persist per folder"
+
+
+def test_data_dir_override_is_ignored_when_blank(tmp_path: Path, monkeypatch) -> None:
+    from lanlink.state import DATA_DIR_ENV, app_data_dir
+
+    monkeypatch.setenv(DATA_DIR_ENV, "   ")
+    assert app_data_dir() == Path.home() / ".lanlink-hub"

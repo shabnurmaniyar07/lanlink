@@ -2,18 +2,31 @@
 
 from __future__ import annotations
 
+import argparse
+import os
 import sys
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from .state import SettingsCorruptError
+from .state import DATA_DIR_ENV, SettingsCorruptError
 from .ui.main_window import MainWindow
 
 __all__ = ["MainWindow", "main"]
 
 
 def main() -> None:
-    app = QApplication(sys.argv)
+    parser = argparse.ArgumentParser(description="LanLink desktop application.")
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="Settings folder to use. A separate folder gives this window its own device "
+        "identity, so a second instance can run on the same machine.",
+    )
+    options, remaining = parser.parse_known_args()
+    if options.data_dir:
+        os.environ[DATA_DIR_ENV] = options.data_dir
+
+    app = QApplication([sys.argv[0], *remaining])
     app.setApplicationName("LanLink")
     app.setOrganizationName("LanLink")
     try:

@@ -29,9 +29,18 @@ class SettingsCorruptError(RuntimeError):
     """Raised when settings cannot be read and no usable backup exists."""
 
 
+DATA_DIR_ENV = "LANLINK_DATA_DIR"
+
+
 def app_data_dir() -> Path:
-    """Return a platform-friendly folder for settings, without shared files."""
-    base = Path.home() / ".lanlink-hub"
+    """Settings folder for this installation, without shared files.
+
+    LANLINK_DATA_DIR points it elsewhere, which lets a second instance run on
+    one machine with its own identity, certificate and shares — useful for
+    testing device-to-device features without a third computer.
+    """
+    override = os.environ.get(DATA_DIR_ENV, "").strip()
+    base = Path(override).expanduser() if override else Path.home() / ".lanlink-hub"
     base.mkdir(parents=True, exist_ok=True)
     return base
 

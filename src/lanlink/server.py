@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import socket
 import threading
 import time
@@ -11,7 +12,7 @@ import uvicorn
 from .api import create_app
 from .crypto import DeviceCertificate, ensure_device_certificate
 from .discovery import DiscoveryService, local_ipv4_address_strings
-from .state import HubState
+from .state import DATA_DIR_ENV, HubState
 
 DEFAULT_PORT = 8765
 PORT_ATTEMPTS = 10
@@ -165,8 +166,16 @@ def main() -> None:
     parser.add_argument(
         "--no-tls", action="store_true", help="Serve plain HTTP (development on a trusted LAN only)"
     )
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="Settings folder to use. A separate folder gives this node its own device identity, "
+        "so a second instance can run on the same machine.",
+    )
     args = parser.parse_args()
 
+    if args.data_dir:
+        os.environ[DATA_DIR_ENV] = args.data_dir
     state = HubState()
     if args.no_tls:
         state.use_tls = False
