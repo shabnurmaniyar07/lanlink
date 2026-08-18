@@ -31,11 +31,23 @@ def test_no_endpoint_returns_html(client: TestClient, auth: dict[str, str]) -> N
 
 
 def test_source_never_launches_a_web_browser() -> None:
-    banned = ("QDesktopServices", "webbrowser", "QWebEngineView", "StaticFiles")
-    for module in PACKAGE_ROOT.glob("*.py"):
+    banned = (
+        "QDesktopServices",
+        "webbrowser",
+        "QWebEngine",
+        "QWebView",
+        "StaticFiles",
+        "setHtml",
+    )
+    for module in PACKAGE_ROOT.rglob("*.py"):
         source = module.read_text(encoding="utf-8")
         for term in banned:
             assert term not in source, f"{module.name} must not reference {term}"
+
+
+def test_no_html_assets_ship_with_the_package() -> None:
+    for pattern in ("*.html", "*.htm", "*.js"):
+        assert list(PACKAGE_ROOT.rglob(pattern)) == []
 
 
 def test_health_and_device_endpoints_are_json(client: TestClient) -> None:
