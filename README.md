@@ -149,9 +149,20 @@ It speaks only the documented protocol, so it works against any implementation, 
 Everything it creates goes in a folder called `lanlink-conformance` and is deleted afterwards, and
 it unpairs itself when it finishes.
 
-Phase status: **0 through 4 complete**, plus the Explorer browser with native drag-and-drop, plus
-the frozen v1 protocol. Next: Phase 5 — the native Kotlin Android client, written against
-`docs/protocol/v1.md`.
+## Android
+
+`android/core/` holds the Kotlin protocol client — models, path rules, resume arithmetic,
+certificate pinning, invites. It imports only the Kotlin standard library and the JDK, so it
+compiles and is tested on a plain JVM here, and drops into an Android project unchanged.
+`tests/test_android_core.py` compiles it, runs its own suite, then drives it against a real Python
+node over a pinned TLS socket. See `android/README.md`.
+
+The Android application around it — Gradle, Compose, NsdManager, SAF — is not written yet; it
+cannot be compiled in this environment.
+
+Phase status: **0 through 4 complete**, plus the Explorer browser with native drag-and-drop, the
+frozen v1 protocol, and the Android protocol core. Next: the Android app shell, built in Android
+Studio against `docs/protocol/v1.md`.
 
 ## Project layout
 
