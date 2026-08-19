@@ -46,6 +46,12 @@ class JobRunner:
     def __init__(self, max_threads: int = 6) -> None:
         self.pool = QThreadPool()
         self.pool.setMaxThreadCount(max_threads)
+        # Jobs still in flight. Callers routinely discard the return value, and
+        # a Job whose last Python reference goes away takes its signals object
+        # with it — Qt then drops the queued emission and the callback never
+        # runs. Holding them here until they report back is what makes the
+        # result arrive at all.
+        self._running: set[Job] = set()
 
     def run(
         self,
@@ -58,8 +64,15 @@ class JobRunner:
             job.signals.finished.connect(on_success)
         if on_error is not None:
             job.signals.failed.connect(on_error)
+        self._running.add(job)
+        job.signals.finished.connect(lambda _result, item=job: self._running.discard(item))
+        job.signals.failed.connect(lambda _message, item=job: self._running.discard(item))
         self.pool.start(job)
         return job
+
+    def pending(self) -> int:
+        """Jobs that have not reported back yet."""
+        return len(self._running)
 
     def wait(self, milliseconds: int = 3000) -> bool:
         return bool(self.pool.waitForDone(milliseconds))

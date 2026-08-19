@@ -878,3 +878,145 @@ def test_the_sidebar_has_no_stylesheet_of_its_own(window) -> None:
     for widget in (window.devices_hint, window.browser_status):
         assert "color:" not in widget.styleSheet()
         assert widget.objectName() == "muted"
+
+
+# ------------------------------------------------- navigation and background jobs
+
+
+def test_all_devices_leaves_the_browser(window) -> None:
+    """setCurrentRow alone did nothing here: the Devices row was already current."""
+    window.current_device = mw.UnifiedDevice(id="dev-1", name="PC", paired_out=True)
+    window.pages.setCurrentIndex(mw.PAGE_BROWSER)
+    assert window.sidebar.currentRow() == mw.PAGE_DEVICES
+
+    window.devices_button.click()
+
+    assert window.pages.currentIndex() == mw.PAGE_DEVICES
+
+
+def test_show_page_keeps_the_sidebar_and_the_stack_together(window) -> None:
+    for page in (mw.PAGE_TRANSFERS, mw.PAGE_SHARES, mw.PAGE_MY_DEVICE, mw.PAGE_DEVICES):
+        window.show_page(page)
+        assert window.pages.currentIndex() == page
+        assert window.sidebar.currentRow() == page
+
+
+def test_a_background_result_still_arrives_when_the_job_is_discarded(qapp) -> None:
+    """The callback used to be dropped: nothing held the job, so its signals died."""
+    from lanlink.ui.jobs import JobRunner
+
+    runner = JobRunner()
+    seen: list[object] = []
+    for index in range(6):
+        runner.run(lambda value=index: value * 2, seen.append)  # return value thrown away
+
+    deadline = threading.Event()
+    for _ in range(400):
+        QApplication.processEvents()
+        if len(seen) == 6:
+            break
+        deadline.wait(0.01)
+
+    assert sorted(seen) == [0, 2, 4, 6, 8, 10]
+    assert runner.pending() == 0, "finished jobs are not released"
+
+
+def test_a_background_failure_also_releases_the_job(qapp) -> None:
+    from lanlink.ui.jobs import JobRunner
+
+    runner = JobRunner()
+    errors: list[str] = []
+
+    def explode():
+        raise RuntimeError("the other device hung up")
+
+    runner.run(explode, None, errors.append)
+    waiter = threading.Event()
+    for _ in range(400):
+        QApplication.processEvents()
+        if errors:
+            break
+        waiter.wait(0.01)
+
+    assert errors == ["the other device hung up"]
+    assert runner.pending() == 0
+
+
+# ------------------------------------------------------------- staging a drag
+
+
+def _browse_files(window, entries) -> None:
+    window.current_device = mw.UnifiedDevice(id="dev-1", name="PC", paired_out=True)
+    window.current_share = {"share_id": "s1", "name": "Docs", "permissions": "rw"}
+    window._folder_loaded(entries)
+
+
+def test_selecting_a_file_starts_fetching_it_for_a_drag(window) -> None:
+    queued = []
+    window.stage_entries = queued.extend
+    _browse_files(window, [{"name": "part.step", "kind": "file", "path": "part.step", "size": 4}])
+    select_row(window, 0)
+
+    window.prestage_selection()
+
+    assert [item.name for item in queued] == ["part.step"]
+
+
+def test_a_big_selection_is_not_fetched_behind_the_user(window) -> None:
+    """Clicking through a folder must not quietly pull a gigabyte."""
+    queued = []
+    window.stage_entries = queued.extend
+    _browse_files(
+        window,
+        [{"name": "huge.bin", "kind": "file", "path": "huge.bin", "size": mw.PRESTAGE_MAX_BYTES + 1}],
+    )
+    select_row(window, 0)
+
+    window.prestage_selection()
+
+    assert queued == []
+
+
+def test_selecting_many_files_at_once_is_not_fetched_either(window) -> None:
+    queued = []
+    window.stage_entries = queued.extend
+    entries = [
+        {"name": f"f{index}.bin", "kind": "file", "path": f"f{index}.bin", "size": 10}
+        for index in range(mw.PRESTAGE_MAX_FILES + 1)
+    ]
+    _browse_files(window, entries)
+    from PySide6.QtCore import QItemSelectionModel
+
+    model = window.entry_view.selectionModel()
+    for row in range(len(entries)):
+        model.select(
+            window.entry_proxy.index(row, 0),
+            QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+        )
+
+    window.prestage_selection()
+
+    assert queued == []
+
+
+def test_a_folder_selection_is_never_prestaged(window) -> None:
+    queued = []
+    window.stage_entries = queued.extend
+    _browse_files(window, [{"name": "Sub", "kind": "folder", "path": "Sub"}])
+    select_row(window, 0)
+
+    window.prestage_selection()
+
+    assert queued == []
+
+
+def test_a_file_already_being_fetched_is_not_queued_twice(window) -> None:
+    queued = []
+    window.stage_entries = queued.extend
+    _browse_files(window, [{"name": "part.step", "kind": "file", "path": "part.step", "size": 4}])
+    select_row(window, 0)
+    window._staging.add("part.step")
+
+    window.prestage_selection()
+
+    assert queued == []

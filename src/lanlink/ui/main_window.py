@@ -77,6 +77,13 @@ PERMISSION_CHOICES = [("r", "Read only"), ("rw", "Read + write"), (ALL_PERMISSIO
 THUMBNAIL_BUDGET = 60
 THUMBNAIL_MAX_BYTES = 40 * 1024 * 1024
 
+# Selecting a file quietly fetches a local copy so a drag works the first time.
+# Bounded, because selecting a folder full of large files must not turn into a
+# gigabyte of traffic nobody asked for.
+PRESTAGE_MAX_FILES = 5
+PRESTAGE_MAX_BYTES = 256 * 1024 * 1024
+PRESTAGE_DELAY_MS = 350
+
 # label, icon size (0 == details/table view)
 VIEW_MODES: list[tuple[str, int]] = [
     ("Details", 0),
@@ -336,6 +343,7 @@ class MainWindow(QMainWindow):
         self.current_share: dict | None = None
         self.current_path = ""
         self._thumbnails_pending: set[str] = set()
+        self._staging: set[str] = set()
         self._history: list[tuple[dict | None, str]] = []
         self._forward: list[tuple[dict | None, str]] = []
         self._navigating = False
@@ -523,7 +531,8 @@ class MainWindow(QMainWindow):
         self.up_button.setFixedWidth(38)
         self.up_button.clicked.connect(self.navigate_back)
         self.devices_button = QPushButton("All devices")
-        self.devices_button.clicked.connect(lambda: self.sidebar.setCurrentRow(PAGE_DEVICES))
+        self.devices_button.setToolTip("Back to the device list")
+        self.devices_button.clicked.connect(lambda: self.show_page(PAGE_DEVICES))
         top.addWidget(self.back_button)
         top.addWidget(self.forward_button)
         top.addWidget(self.up_button)
@@ -576,6 +585,15 @@ class MainWindow(QMainWindow):
         self.entry_view.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         self.entry_view.drag_provider = self.paths_for_drag
         self.entry_view.dragRequested.connect(self.refresh_transfers)
+        # Fetching the local copy as soon as a file is selected is what makes
+        # the first drag work rather than only preparing.
+        self._prestage_timer = QTimer(self)
+        self._prestage_timer.setSingleShot(True)
+        self._prestage_timer.setInterval(PRESTAGE_DELAY_MS)
+        self._prestage_timer.timeout.connect(self.prestage_selection)
+        selection = self.entry_view.selectionModel()
+        if selection is not None:
+            selection.selectionChanged.connect(lambda *_: self._prestage_timer.start())
         self.search_box.textChanged.connect(self.entry_proxy.set_search)
 
         # The icon view shares model *and* selection model, so switching view
@@ -869,6 +887,17 @@ class MainWindow(QMainWindow):
 
     def _warn(self, title: str, message: str) -> None:
         QMessageBox.warning(self, title, message)
+
+    def show_page(self, index: int) -> None:
+        """Switch pages *and* the sidebar.
+
+        setCurrentRow on its own is not enough: the browser lives at an index
+        past the sidebar and keeps the Devices row selected, so asking for
+        Devices again emits nothing and leaves the browser on screen.
+        """
+        if 0 <= index < len(PAGES):
+            self.sidebar.setCurrentRow(index)
+        self.pages.setCurrentIndex(index)
 
     def _sidebar_changed(self, row: int) -> None:
         if 0 <= row < len(PAGES):
@@ -1177,8 +1206,7 @@ class MainWindow(QMainWindow):
             self.current_share = None
             self.current_path = ""
             self.entry_model.set_entries([])
-            self.sidebar.setCurrentRow(PAGE_DEVICES)
-            self.pages.setCurrentIndex(PAGE_DEVICES)
+            self.show_page(PAGE_DEVICES)
         self.refresh_devices()
         self.status_line.showMessage(f"Forgot {device.name}", 6000)
 
@@ -1300,11 +1328,8 @@ class MainWindow(QMainWindow):
         self.load_folder(self.current_share, "/".join(parts[: index - 1]))
 
     def navigate_back(self) -> None:
-        if self.current_device is None:
-            self.sidebar.setCurrentRow(PAGE_DEVICES)
-            return
-        if self.current_share is None:
-            self.sidebar.setCurrentRow(PAGE_DEVICES)
+        if self.current_device is None or self.current_share is None:
+            self.show_page(PAGE_DEVICES)
             return
         parts = [part for part in self.current_path.split("/") if part]
         if not parts:
@@ -1444,7 +1469,10 @@ class MainWindow(QMainWindow):
                     if sha256_of(partial).lower() != digest.lower():
                         raise RuntimeError(f"{remote.name} failed its SHA-256 check.")
 
-            stager.stage_file(remote, fetch, force=True)
+            try:
+                stager.stage_file(remote, fetch, force=True)
+            finally:
+                self._staging.discard(remote.path)
 
         return run
 
@@ -1457,6 +1485,7 @@ class MainWindow(QMainWindow):
             runner = self._stage_runner(remote)
             if runner is None:
                 continue
+            self._staging.add(remote.path)
             self.transfers.submit(
                 kind="stage",
                 filename=remote.name,
@@ -1689,6 +1718,29 @@ class MainWindow(QMainWindow):
         open_local_file(local)
         self.status_line.showMessage(f"Opened {local}", 6000)
 
+    def prestage_selection(self) -> None:
+        """Fetch local copies for a modest selection, so a drag starts at once.
+
+        Only what a person plausibly means to drag: a handful of files, none of
+        them enormous. Anything bigger still works, it just prepares on the
+        first drag the way it always did.
+        """
+        if self.current_share is None:
+            return
+        entries = [entry for entry in self._selected_entries() if entry.get("kind") == "file"]
+        if not entries or len(entries) > PRESTAGE_MAX_FILES:
+            return
+        if any((entry.get("size") or 0) > PRESTAGE_MAX_BYTES for entry in entries):
+            return
+        remotes = [remote for remote in map(self._remote_for, entries) if remote is not None]
+        pending = [
+            remote
+            for remote in plan_drag(self.stager, remotes).pending
+            if remote.path not in self._staging
+        ]
+        if pending:
+            self.stage_entries(pending)
+
     def prepare_selection_for_drag(self) -> None:
         """Stage the selection up front so the next drag starts instantly."""
         entries = [entry for entry in self._selected_entries() if entry.get("kind") == "file"]
@@ -1730,7 +1782,7 @@ class MainWindow(QMainWindow):
                 size=entry.get("size"),
                 runner=runner,
             )
-        self.sidebar.setCurrentRow(PAGE_TRANSFERS)
+        self.show_page(PAGE_TRANSFERS)
 
     def upload_folder_into_current(self) -> None:
         if not self.current_share:
@@ -1772,7 +1824,7 @@ class MainWindow(QMainWindow):
                 size=None if is_folder else path.stat().st_size,
                 runner=runner,
             )
-        self.sidebar.setCurrentRow(PAGE_TRANSFERS)
+        self.show_page(PAGE_TRANSFERS)
         QTimer.singleShot(1200, self.reload_current_folder)
 
     def create_remote_folder(self) -> None:
@@ -1959,7 +2011,7 @@ class MainWindow(QMainWindow):
                     delete_source=move,
                 ),
             )
-        self.sidebar.setCurrentRow(PAGE_TRANSFERS)
+        self.show_page(PAGE_TRANSFERS)
         if move:
             QTimer.singleShot(1500, self.reload_current_folder)
 
@@ -2021,7 +2073,7 @@ class MainWindow(QMainWindow):
         transfer = self._selected_transfer(self.history_view, self.history_model)
         if transfer:
             self.transfers.retry(transfer.id)
-            self.sidebar.setCurrentRow(PAGE_TRANSFERS)
+            self.show_page(PAGE_TRANSFERS)
 
     def clear_history(self) -> None:
         self.transfers.clear_history()
