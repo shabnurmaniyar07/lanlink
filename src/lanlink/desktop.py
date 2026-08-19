@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .state import DATA_DIR_ENV, SettingsCorruptError
 from .ui.main_window import MainWindow
+from .ui.theme import apply_theme, saved_theme
 
 __all__ = ["MainWindow", "main"]
 
@@ -29,6 +30,8 @@ def main() -> None:
     app = QApplication([sys.argv[0], *remaining])
     app.setApplicationName("LanLink")
     app.setOrganizationName("LanLink")
+    # Paint before the window exists, so it never flashes the wrong theme.
+    apply_theme(app, saved_theme())
     try:
         window = MainWindow()
     except SettingsCorruptError as error:

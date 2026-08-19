@@ -43,13 +43,16 @@ class QrLabel(QLabel):
         self.pixels = pixels
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(QSize(pixels, pixels))
-        self.setStyleSheet("border: 1px solid #dfe4ef; border-radius: 8px; background: white;")
+        # A QR code has to stay black on white to scan, whatever the theme is.
+        self.setObjectName("qrCode")
         self.clear_code()
 
     def set_payload(self, payload: str) -> None:
         try:
             self.setPixmap(render_qr(payload, self.pixels))
             self.setText("")
+            self.setObjectName("qrCode")
+            self.style().polish(self)
         except Exception:  # noqa: BLE001 - a missing QR encoder must not break pairing
             self.clear_code("The code above still works if you type it in.")
 
@@ -57,6 +60,5 @@ class QrLabel(QLabel):
         self.setPixmap(QPixmap())
         self.setText(message)
         self.setWordWrap(True)
-        self.setStyleSheet(
-            "border: 1px dashed #c7cede; border-radius: 8px; color: #8b93a4; background: #fafbfe;"
-        )
+        self.setObjectName("qrEmpty")
+        self.style().polish(self)

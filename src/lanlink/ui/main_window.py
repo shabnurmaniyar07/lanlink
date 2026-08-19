@@ -62,6 +62,7 @@ from .dragdrop import entry_to_remote, plan_drag
 from .jobs import JobRunner
 from .pairing import PairingApproval
 from .qrcode import QrLabel
+from .theme import apply_theme, save_theme, saved_theme, theme_choices
 from .thumbnails import ThumbnailCache
 from .transfer_model import TransferTableModel, summarise
 from .widgets import Breadcrumb, DropListView, DropTreeView, ProgressDelegate, open_local_file
@@ -199,7 +200,7 @@ class PairingDialog(QDialog):
             "You can start waiting first — LanLink keeps trying until that device is ready."
         )
         explain.setWordWrap(True)
-        explain.setStyleSheet("color: #5c6473;")
+        explain.setObjectName("muted")
         layout.addWidget(explain)
 
         form = QFormLayout()
@@ -361,14 +362,9 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         self.sidebar = QListWidget()
+        self.sidebar.setObjectName("sidebar")  # styled globally, see ui/theme.py
         self.sidebar.setMaximumWidth(230)
         self.sidebar.setMinimumWidth(185)
-        self.sidebar.setStyleSheet(
-            "QListWidget { border: none; background: #f2f4f8; padding-top: 8px; font-size: 14px; }"
-            "QListWidget::item { padding: 11px 14px; border-radius: 6px; margin: 2px 6px; }"
-            "QListWidget::item:selected { background: #2457d6; color: white; }"
-            "QListWidget::item:hover:!selected { background: #e2e7f1; }"
-        )
         for label in PAGES:
             self.sidebar.addItem(QListWidgetItem(label))
         self.sidebar.currentRowChanged.connect(self._sidebar_changed)
@@ -397,9 +393,15 @@ class MainWindow(QMainWindow):
         layout.addWidget(heading)
         caption = QLabel(subtitle)
         caption.setWordWrap(True)
-        caption.setStyleSheet("color: #5c6473;")
+        caption.setObjectName("muted")
         layout.addWidget(caption)
         return page, layout
+
+    def _heading(self, text: str) -> QLabel:
+        """A section heading inside a page. Its colour comes from the theme."""
+        label = QLabel(f"<b>{text}</b>")
+        label.setStyleSheet("margin-top: 10px;")
+        return label
 
     def _build_my_device(self) -> QWidget:
         page, layout = self._page("My Device", "How other LanLink devices see this computer.")
@@ -450,7 +452,7 @@ class MainWindow(QMainWindow):
             "certificate, so the other side pins the right identity."
         )
         qr_hint.setWordWrap(True)
-        qr_hint.setStyleSheet("color: #5c6473;")
+        qr_hint.setObjectName("muted")
         qr_row.addWidget(qr_hint, 1)
         layout.addLayout(qr_row)
         layout.addStretch()
@@ -488,7 +490,7 @@ class MainWindow(QMainWindow):
 
         self.devices_hint = QLabel()
         self.devices_hint.setWordWrap(True)
-        self.devices_hint.setStyleSheet("color: #5c6473;")
+        self.devices_hint.setObjectName("muted")
         layout.addWidget(self.devices_hint)
 
         manual = QHBoxLayout()
@@ -600,7 +602,7 @@ class MainWindow(QMainWindow):
 
         self.browser_status = QLabel("")
         self.browser_status.setWordWrap(True)
-        self.browser_status.setStyleSheet("color: #5c6473;")
+        self.browser_status.setObjectName("muted")
         layout.addWidget(self.browser_status)
         return page
 
@@ -705,6 +707,18 @@ class MainWindow(QMainWindow):
     def _build_settings(self) -> QWidget:
         page, layout = self._page("Settings", "These apply to this installation of LanLink.")
 
+        appearance = QFormLayout()
+        self.theme_combo = QComboBox()
+        for label, value in theme_choices():
+            self.theme_combo.addItem(label, value)
+        saved = saved_theme()
+        self.theme_combo.setCurrentIndex(max(0, self.theme_combo.findData(saved)))
+        self.theme_combo.currentIndexChanged.connect(self.change_theme)
+        appearance.addRow("Theme:", self.theme_combo)
+        layout.addWidget(self._heading("Appearance"))
+        layout.addLayout(appearance)
+
+        layout.addWidget(self._heading("Device"))
         form = QFormLayout()
         self.setting_name = QLineEdit(self.state.device_name)
         form.addRow("Device name:", self.setting_name)
@@ -755,7 +769,7 @@ class MainWindow(QMainWindow):
             "the cache is safe; files are staged again the next time they are needed."
         )
         cache_note.setWordWrap(True)
-        cache_note.setStyleSheet("color: #5c6473;")
+        cache_note.setObjectName("muted")
         layout.addWidget(cache_note)
 
         note = QLabel(
@@ -764,7 +778,7 @@ class MainWindow(QMainWindow):
             "Turning TLS off is for troubleshooting on a network you fully control."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color: #5c6473;")
+        note.setObjectName("muted")
         layout.addWidget(note)
 
         row = QHBoxLayout()
@@ -2073,6 +2087,12 @@ class MainWindow(QMainWindow):
             self.refresh_shares()
 
     # --------------------------------------------------------------- settings
+
+    def change_theme(self, index: int) -> None:
+        """Persist and repaint at once; the user should not have to restart."""
+        mode = self.theme_combo.itemData(index)
+        painted = apply_theme(QApplication.instance(), save_theme(mode))
+        self.status_line.showMessage(f"Theme: {self.theme_combo.itemText(index)} ({painted})", 4000)
 
     def save_settings(self) -> None:
         self.state.set_device_name(self.setting_name.text())

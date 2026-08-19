@@ -118,6 +118,16 @@ def window(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(mw, "DiscoveryBrowser", FakeDiscovery)
     # Keep the staging and thumbnail caches inside the test's own directory.
     monkeypatch.setenv("LANLINK_DATA_DIR", str(tmp_path / "data"))
+    # ...and the theme preference out of the real user configuration.
+    from PySide6.QtCore import QSettings
+
+    from lanlink.ui import theme as theme_module
+
+    monkeypatch.setattr(
+        theme_module,
+        "settings",
+        lambda: QSettings(str(tmp_path / "ui.ini"), QSettings.Format.IniFormat),
+    )
 
     share = tmp_path / "shared"
     share.mkdir()
@@ -817,3 +827,54 @@ def test_forget_closes_the_browser_when_it_was_showing_that_device(window, monke
     assert window.current_device is None
     assert window.current_share is None
     assert window.pages.currentIndex() != mw.PAGE_BROWSER
+
+
+# ------------------------------------------------------------------ appearance
+
+
+def test_settings_page_offers_the_three_themes(window) -> None:
+    labels = [window.theme_combo.itemText(i) for i in range(window.theme_combo.count())]
+    values = [window.theme_combo.itemData(i) for i in range(window.theme_combo.count())]
+    assert labels == ["System Default", "Light", "Dark"]
+    assert values == ["system", "light", "dark"]
+    assert window.theme_combo.currentData() == "system", "the default is System Default"
+
+
+def test_choosing_a_theme_saves_it_and_repaints_at_once(window, qapp) -> None:
+    from lanlink.ui import theme as theme_module
+
+    before = qapp.styleSheet()
+    window.theme_combo.setCurrentIndex(window.theme_combo.findData("dark"))
+
+    assert theme_module.saved_theme() == "dark"
+    assert qapp.styleSheet() != before
+    assert theme_module.PALETTES["dark"]["window"] in qapp.styleSheet()
+
+    window.theme_combo.setCurrentIndex(window.theme_combo.findData("light"))
+    assert theme_module.saved_theme() == "light"
+    assert theme_module.PALETTES["light"]["window"] in qapp.styleSheet()
+
+
+def test_the_saved_theme_is_what_a_new_window_shows(window, qapp, tmp_path, monkeypatch) -> None:
+    """What the next launch reads back, without starting a second QApplication."""
+    from lanlink.ui import theme as theme_module
+
+    window.theme_combo.setCurrentIndex(window.theme_combo.findData("dark"))
+    assert theme_module.saved_theme() == "dark"
+
+    second = mw.MainWindow(state=HubState(tmp_path / "second.json"))
+    try:
+        assert second.theme_combo.currentData() == "dark"
+    finally:
+        second.transfers.shutdown()
+        second.runner.wait(2000)
+        second.deleteLater()
+
+
+def test_the_sidebar_has_no_stylesheet_of_its_own(window) -> None:
+    """Colours must come from the global sheet, or pages drift apart again."""
+    assert window.sidebar.styleSheet() == ""
+    assert window.sidebar.objectName() == "sidebar"
+    for widget in (window.devices_hint, window.browser_status):
+        assert "color:" not in widget.styleSheet()
+        assert widget.objectName() == "muted"
