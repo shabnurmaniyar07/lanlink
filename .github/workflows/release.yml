@@ -1,0 +1,123 @@
+name: release
+
+# Tag a commit and GitHub builds the Windows installer and publishes it. The
+# update check in Settings looks at exactly these releases, so a tag is all it
+# takes for every LanLink out there to notice a new version.
+#
+#     git tag v0.2.0 && git push origin v0.2.0
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, without the leading v"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Build the installer
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install LanLink and PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pip install pyinstaller
+
+      - name: Read the version out of the package
+        id: version
+        shell: bash
+        run: |
+          version=$(python -c "import sys; sys.path.insert(0,'src'); import lanlink; print(lanlink.__version__)")
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+          echo "LanLink $version"
+
+      # A tag that disagrees with the package would publish an installer the
+      # update check then refuses to offer. Better to fail here.
+      - name: The tag and the package agree
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "${{ steps.version.outputs.value }}" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match lanlink.__version__ ${{ steps.version.outputs.value }}."
+            echo "Raise __version__ in src/lanlink/__init__.py, or retag."
+            exit 1
+          fi
+
+      - name: Tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+      - name: The Windows version resource is in step
+        run: python tools/sync_version.py --check
+
+      - name: Build LanLink.exe
+        run: python -m PyInstaller packaging/lanlink.spec --noconfirm --clean
+
+      - name: The application was actually produced
+        shell: bash
+        run: test -f dist/LanLink/LanLink.exe
+
+      # The runner image usually ships Inno Setup, but the image changes and a
+      # release that fails at the last step is a bad afternoon.
+      - name: Make sure Inno Setup is available
+        id: inno
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            Write-Host "Installing Inno Setup"
+            choco install innosetup --no-progress -y
+            $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) { throw "Inno Setup could not be found or installed." }
+          Write-Host "Using $iscc"
+          "path=$iscc" >> $env:GITHUB_OUTPUT
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path packaging\output | Out-Null
+          & "${{ steps.inno.outputs.path }}" /DAppVersion=${{ steps.version.outputs.value }} packaging\lanlink.iss
+
+      - name: Also publish a portable zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\LanLink\* `
+            -DestinationPath packaging\output\LanLink-${{ steps.version.outputs.value }}-portable.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LanLink-${{ steps.version.outputs.value }}
+          path: packaging/output/*
+          retention-days: 30
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: LanLink ${{ steps.version.outputs.value }}
+          draft: true
+          generate_release_notes: true
+          files: |
+            packaging/output/LanLinkSetup-${{ steps.version.outputs.value }}.exe
+            packaging/output/LanLink-${{ steps.version.outputs.value }}-portable.zip

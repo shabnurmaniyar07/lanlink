@@ -2,6 +2,20 @@ __pycache__/
 *.py[cod]
 .venv/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 dist/
 build/
 *.egg-info/
+
+# Packaging output
+packaging/output/
+
+# Compiled Kotlin from tests/test_android_core.py
+android/**/classes/
+*.class
+
+# Never commit a device identity, its private key, or anybody's settings
+*.pem
+settings.json
+settings.json.bak

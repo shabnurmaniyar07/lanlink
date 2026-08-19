@@ -1,4 +1,6 @@
-# LanLink Hub
+# LanLink
+
+[![tests](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
 
 LanLink is a native cross-device local file-sharing application. Every device runs an installed
 LanLink app; there is **no browser interface, no HTML UI, and no WebView**. HTTP/FastAPI is used

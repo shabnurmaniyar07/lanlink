@@ -1,0 +1,34 @@
+name: Something is wrong
+description: A transfer failed, a device will not pair, the window misbehaves
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not paste a pairing code, a token, or a full `lanlink://pair`
+        invite. They are credentials.
+  - type: input
+    id: version
+    attributes:
+      label: LanLink version
+      description: Settings → Updates shows it
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 23H2"
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead
+    validations:
+      required: true
+  - type: textarea
+    id: transfers
+    attributes:
+      label: What the Transfers page said
+      description: The status and any error text, if a transfer was involved
