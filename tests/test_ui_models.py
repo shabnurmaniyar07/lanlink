@@ -173,9 +173,11 @@ def test_entry_model_columns(qapp) -> None:
     model.set_entries(ENTRIES)
     assert model.rowCount() == 3
     assert model.columnCount() == 4
-    assert "notes.txt" in model.data(model.index(0, 0), Qt.ItemDataRole.DisplayRole)
+    assert model.data(model.index(0, 0), Qt.ItemDataRole.DisplayRole) == "notes.txt"
     assert model.data(model.index(0, 1), Qt.ItemDataRole.DisplayRole) == "120 B"
-    assert model.data(model.index(1, 3), Qt.ItemDataRole.DisplayRole) == "Folder"
+    assert model.data(model.index(0, 2), Qt.ItemDataRole.DisplayRole) == "Text Document"
+    assert model.data(model.index(1, 2), Qt.ItemDataRole.DisplayRole) == "Folder"
+    assert model.data(model.index(2, 2), Qt.ItemDataRole.DisplayRole) == "ZIP Archive"
 
 
 def test_folders_sort_above_files_in_both_directions(qapp) -> None:

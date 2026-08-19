@@ -116,6 +116,8 @@ def qapp():
 def window(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(mw, "LocalService", FakeService)
     monkeypatch.setattr(mw, "DiscoveryBrowser", FakeDiscovery)
+    # Keep the staging and thumbnail caches inside the test's own directory.
+    monkeypatch.setenv("LANLINK_DATA_DIR", str(tmp_path / "data"))
 
     share = tmp_path / "shared"
     share.mkdir()
@@ -289,7 +291,10 @@ def test_context_menu_respects_permissions(window, monkeypatch) -> None:
     assert captured["Delete"] is False
     assert captured["Rename…"] is False
     assert captured["Upload here…"] is False
-    assert captured["Download…"] is True
+    assert captured["Download to…"] is True
+    # Read-only shares still allow the local-copy actions the Explorer view adds.
+    assert captured["Copy local staged path"] is True
+    assert captured["Prepare for drag"] is True
 
     captured.clear()
     window.current_share = {"share_id": "s1", "name": "Docs", "permissions": "rwd"}
@@ -521,3 +526,223 @@ def test_pairing_dialog_cancel_stops_the_request(window) -> None:
     dialog.request = _Request(lambda: {}, block=True)
     dialog.reject()
     assert dialog.request.cancelled is True
+
+
+# ------------------------------------------------------- Explorer browsing
+
+
+def _browse(window, path: str = "") -> None:
+    """Put the window in a folder without touching the network."""
+    window.current_device = mw.UnifiedDevice(id="dev-1", name="PC", paired_out=True)
+    window.current_share = {"share_id": "s1", "name": "Docs", "permissions": "rw"}
+    window.current_path = path
+
+
+def test_view_modes_switch_between_details_and_icons(window) -> None:
+    window.pages.setCurrentIndex(mw.PAGE_BROWSER)
+    for index, (label, size) in enumerate(mw.VIEW_MODES):
+        window.set_view_mode(index)
+        if size == 0:
+            assert window.active_view is window.entry_view, label
+        else:
+            assert window.active_view is window.icon_view, label
+            assert window.icon_view.iconSize().width() == size
+    window.set_view_mode(0)
+
+
+def test_both_views_share_one_selection(window) -> None:
+    _browse(window)
+    window._folder_loaded([{"name": "a.txt", "kind": "file", "path": "a.txt", "size": 1}])
+    select_row(window, 0)
+    assert window.icon_view.selectionModel() is window.entry_view.selectionModel()
+    window.set_view_mode(2)
+    assert [entry["name"] for entry in window._selected_entries()] == ["a.txt"]
+    window.set_view_mode(0)
+
+
+def test_back_and_forward_walk_the_history(window) -> None:
+    _browse(window)
+    share = window.current_share
+    window.load_folder(share, "one")
+    window.load_folder(share, "one/two")
+    assert window.current_path == "one/two"
+
+    window.go_back()
+    assert window.current_path == "one"
+    window.go_back()
+    assert window.current_path == ""
+
+    window.go_forward()
+    assert window.current_path == "one"
+    assert window.forward_button.isEnabled() is True
+
+
+def test_refresh_does_not_add_a_history_entry(window) -> None:
+    _browse(window)
+    window.load_folder(window.current_share, "one")
+    depth = len(window._history)
+    window.reload_current_folder()
+    assert len(window._history) == depth
+
+
+def test_navigation_buttons_reflect_where_you_are(window) -> None:
+    _browse(window)
+    window.current_share = None
+    window._update_navigation_buttons()
+    assert window.up_button.isEnabled() is False
+    _browse(window)
+    window._update_navigation_buttons()
+    assert window.up_button.isEnabled() is True
+
+
+def test_search_matches_name_or_type(window) -> None:
+    _browse(window)
+    window._folder_loaded(
+        [
+            {"name": "arm.step", "kind": "file", "path": "arm.step", "size": 1},
+            {"name": "notes.txt", "kind": "file", "path": "notes.txt", "size": 1},
+        ]
+    )
+    window.search_box.setText("step")
+    assert window.entry_proxy.rowCount() == 1
+    window.search_box.setText("text document")
+    assert window.entry_proxy.rowCount() == 1
+    assert window.entry_proxy.entry_at(0)["name"] == "notes.txt"
+    window.search_box.clear()
+
+
+def test_drag_of_an_unstaged_file_prepares_instead_of_blocking(window) -> None:
+    """The GUI thread must not download; it queues the work and declines the drag."""
+    _browse(window)
+    window._folder_loaded([{"name": "part.step", "kind": "file", "path": "part.step", "size": 4}])
+    select_row(window, 0)
+
+    queued = []
+    window.stage_entries = queued.extend
+
+    assert window.paths_for_drag() is None
+    assert [item.name for item in queued] == ["part.step"]
+
+
+def test_drag_of_a_staged_file_returns_a_local_path(window) -> None:
+    _browse(window)
+    entry = {"name": "part.step", "kind": "file", "path": "part.step", "size": 4}
+    window._folder_loaded([entry])
+    select_row(window, 0)
+
+    item = window._remote_for(entry)
+    window.stager.stage_file(item, lambda partial: partial.write_bytes(b"data"))
+
+    paths = window.paths_for_drag()
+    assert paths is not None
+    assert paths[0].is_file()
+    assert paths[0].read_bytes() == b"data"
+    assert "http" not in str(paths[0]).lower()
+
+
+def test_folders_are_never_offered_to_a_drag(window) -> None:
+    _browse(window)
+    window._folder_loaded([{"name": "Sub", "kind": "folder", "path": "Sub"}])
+    select_row(window, 0)
+    assert window.paths_for_drag() is None
+
+
+def test_open_uses_the_staged_copy_when_there_is_one(window, monkeypatch) -> None:
+    _browse(window)
+    entry = {"name": "part.step", "kind": "file", "path": "part.step", "size": 4}
+    window._folder_loaded([entry])
+    select_row(window, 0)
+    staged = window.stager.stage_file(
+        window._remote_for(entry), lambda partial: partial.write_bytes(b"data")
+    )
+
+    opened = []
+    monkeypatch.setattr(mw, "open_local_file", opened.append)
+    window.open_entry()
+
+    assert opened == [staged]
+    assert not window.transfers.active(), "a cached file must not be downloaded again"
+
+
+def test_copy_local_staged_path_puts_a_windows_path_on_the_clipboard(window) -> None:
+    _browse(window)
+    entry = {"name": "part.step", "kind": "file", "path": "part.step", "size": 4}
+    window._folder_loaded([entry])
+    select_row(window, 0)
+    staged = window.stager.stage_file(
+        window._remote_for(entry), lambda partial: partial.write_bytes(b"data")
+    )
+
+    window.copy_staged_paths_to_clipboard()
+    assert QApplication.clipboard().text() == str(staged)
+
+
+def test_cache_summary_reports_the_staging_folder(window) -> None:
+    window.refresh_cache_summary()
+    assert str(window.stager.root) in window.cache_label.text()
+    assert "staged file(s)" in window.cache_label.text()
+
+
+def test_clearing_the_cache_leaves_the_browser_usable(window) -> None:
+    _browse(window)
+    entry = {"name": "part.step", "kind": "file", "path": "part.step", "size": 4}
+    window._folder_loaded([entry])
+    window.stager.stage_file(window._remote_for(entry), lambda partial: partial.write_bytes(b"data"))
+
+    window.clear_staging_cache()
+
+    assert window.stager.usage() == (0, 0)
+    assert window.entry_model.rowCount() == 1
+
+
+def test_staging_cache_lives_outside_the_shared_folders(window) -> None:
+    """A staged copy must never land inside a folder LanLink serves to peers."""
+    roots = [str(mw.Path(share.path).resolve()) for share in window.state.shares.values()]
+    staged_root = str(window.stager.root.resolve())
+    assert all(not staged_root.startswith(root) for root in roots)
+
+
+def test_thumbnails_are_only_downloaded_in_an_icon_view(window) -> None:
+    """Browsing a photo folder in Details must not pull every image over the LAN."""
+    _browse(window)
+    queued = []
+    window._queue_thumbnail = queued.append
+    entries = [
+        {"name": f"shot_{i}.jpg", "kind": "file", "path": f"shot_{i}.jpg", "size": 1000 + i}
+        for i in range(3)
+    ]
+
+    window.set_view_mode(0)
+    window._folder_loaded(entries)
+    assert queued == []
+
+    window.set_view_mode(3)
+    assert [item.name for item in queued] == ["shot_0.jpg", "shot_1.jpg", "shot_2.jpg"]
+    window.set_view_mode(0)
+
+
+def test_thumbnail_downloads_are_bounded(window) -> None:
+    _browse(window)
+    queued = []
+    window._queue_thumbnail = queued.append
+    window.set_view_mode(3)
+    window._folder_loaded(
+        [
+            {"name": f"shot_{i}.jpg", "kind": "file", "path": f"shot_{i}.jpg", "size": 10}
+            for i in range(mw.THUMBNAIL_BUDGET + 25)
+        ]
+    )
+    assert len(queued) == mw.THUMBNAIL_BUDGET
+    window.set_view_mode(0)
+
+
+def test_huge_images_are_left_with_their_type_glyph(window) -> None:
+    _browse(window)
+    queued = []
+    window._queue_thumbnail = queued.append
+    window.set_view_mode(3)
+    window._folder_loaded(
+        [{"name": "panorama.jpg", "kind": "file", "path": "panorama.jpg", "size": mw.THUMBNAIL_MAX_BYTES + 1}]
+    )
+    assert queued == []
+    window.set_view_mode(0)

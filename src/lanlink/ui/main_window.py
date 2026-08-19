@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import tempfile
+import contextlib
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QIntValidator
+from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QIcon, QIntValidator, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -42,6 +44,7 @@ from ..discovery import DiscoveryBrowser, local_ipv4_address_strings
 from ..invite import InvalidInvite, Invite, parse_invite
 from ..pairing_request import PAIRING_WAIT_SECONDS, PairingOutcome, PairingRequest
 from ..server import LocalService
+from ..staging import RemoteFile, RemoteFileStager
 from ..state import ALL_PERMISSIONS, HubState, RemoteDevice
 from ..transfers import (
     TransferManager,
@@ -55,17 +58,31 @@ from ..transfers import (
 )
 from .browser_model import EntryFilterProxy, RemoteEntryModel, format_size, format_time
 from .devices import DeviceListModel, DeviceStatus, HealthTracker, UnifiedDevice, merge_devices
+from .dragdrop import entry_to_remote, plan_drag
 from .jobs import JobRunner
 from .pairing import PairingApproval
 from .qrcode import QrLabel
+from .thumbnails import ThumbnailCache
 from .transfer_model import TransferTableModel, summarise
-from .widgets import Breadcrumb, DropTreeView, ProgressDelegate, open_local_file
+from .widgets import Breadcrumb, DropListView, DropTreeView, ProgressDelegate, open_local_file
 
 PAGES = ["My Device", "Devices", "Transfers", "Shared Folders", "History", "Settings"]
 PAGE_MY_DEVICE, PAGE_DEVICES, PAGE_TRANSFERS, PAGE_SHARES, PAGE_HISTORY, PAGE_SETTINGS = range(6)
 PAGE_BROWSER = 6
 
 PERMISSION_CHOICES = [("r", "Read only"), ("rw", "Read + write"), (ALL_PERMISSIONS, "Read + write + delete")]
+
+# Previews are a convenience, not a transfer: bound what browsing can download.
+THUMBNAIL_BUDGET = 60
+THUMBNAIL_MAX_BYTES = 40 * 1024 * 1024
+
+# label, icon size (0 == details/table view)
+VIEW_MODES: list[tuple[str, int]] = [
+    ("Details", 0),
+    ("Small icons", 32),
+    ("Medium icons", 64),
+    ("Large icons", 112),
+]
 
 
 class TransferBridge(QObject):
@@ -312,9 +329,15 @@ class MainWindow(QMainWindow):
 
         self._invite: Invite | None = None
         self._addresses = local_ipv4_address_strings()
+        self.stager = RemoteFileStager()
+        self.thumbnails = ThumbnailCache()
         self.current_device: UnifiedDevice | None = None
         self.current_share: dict | None = None
         self.current_path = ""
+        self._thumbnails_pending: set[str] = set()
+        self._history: list[tuple[dict | None, str]] = []
+        self._forward: list[tuple[dict | None, str]] = []
+        self._navigating = False
 
         self.setWindowTitle("LanLink")
         self.resize(1180, 760)
@@ -485,15 +508,33 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(page)
 
         top = QHBoxLayout()
-        self.back_button = QPushButton("← Back")
-        self.back_button.clicked.connect(self.navigate_back)
+        self.back_button = QPushButton("←")
+        self.back_button.setToolTip("Back")
+        self.back_button.setFixedWidth(38)
+        self.back_button.clicked.connect(self.go_back)
+        self.forward_button = QPushButton("→")
+        self.forward_button.setToolTip("Forward")
+        self.forward_button.setFixedWidth(38)
+        self.forward_button.clicked.connect(self.go_forward)
+        self.up_button = QPushButton("↑")
+        self.up_button.setToolTip("Up one level")
+        self.up_button.setFixedWidth(38)
+        self.up_button.clicked.connect(self.navigate_back)
         self.devices_button = QPushButton("All devices")
         self.devices_button.clicked.connect(lambda: self.sidebar.setCurrentRow(PAGE_DEVICES))
         top.addWidget(self.back_button)
+        top.addWidget(self.forward_button)
+        top.addWidget(self.up_button)
         top.addWidget(self.devices_button)
         top.addStretch()
+        self.view_box = QComboBox()
+        for label, _size in VIEW_MODES:
+            self.view_box.addItem(label)
+        self.view_box.setToolTip("View")
+        self.view_box.currentIndexChanged.connect(self.set_view_mode)
+        top.addWidget(self.view_box)
         self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Search this folder…")
+        self.search_box.setPlaceholderText("Search this folder by name or type…")
         self.search_box.setClearButtonEnabled(True)
         self.search_box.setMaximumWidth(260)
         top.addWidget(self.search_box)
@@ -531,13 +572,31 @@ class MainWindow(QMainWindow):
         self.entry_view.customContextMenuRequested.connect(self.show_entry_menu)
         self.entry_view.filesDropped.connect(self.upload_paths)
         self.entry_view.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+        self.entry_view.drag_provider = self.paths_for_drag
+        self.entry_view.dragRequested.connect(self.refresh_transfers)
         self.search_box.textChanged.connect(self.entry_proxy.set_search)
+
+        # The icon view shares model *and* selection model, so switching view
+        # mode keeps the sort, the search filter and whatever was selected.
+        self.icon_view = DropListView()
+        self.icon_view.setModel(self.entry_proxy)
+        self.icon_view.setSelectionModel(self.entry_view.selectionModel())
+        self.icon_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.icon_view.customContextMenuRequested.connect(self.show_entry_menu)
+        self.icon_view.doubleClicked.connect(self.activate_entry)
+        self.icon_view.filesDropped.connect(self.upload_paths)
+        self.icon_view.drag_provider = self.paths_for_drag
+        self.icon_view.dragRequested.connect(self.refresh_transfers)
+        self.icon_view.hide()
         header = self.entry_view.header()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for column in (1, 2, 3):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        self.entry_view.setStyleSheet("QTreeView::item { padding: 3px 2px; }")
+        self.entry_view.setStyleSheet("QTreeView::item { padding: 4px 2px; }")
         layout.addWidget(self.entry_view)
+        layout.addWidget(self.icon_view)
+
+        self._install_browser_shortcuts()
 
         self.browser_status = QLabel("")
         self.browser_status.setWordWrap(True)
@@ -672,7 +731,32 @@ class MainWindow(QMainWindow):
         self.setting_verify.setEnabled(False)
         self.setting_verify.setToolTip("Always on: LanLink will not publish a file that fails its checksum.")
         form.addRow("Transfers:", self.setting_verify)
+
+        self.cache_label = QLabel("")
+        self.cache_label.setWordWrap(True)
+        form.addRow("Local cache:", self.cache_label)
         layout.addLayout(form)
+
+        cache_row = QHBoxLayout()
+        for label, slot in [
+            ("Open cache folder", self.open_cache_folder),
+            ("Clear staged files", self.clear_staging_cache),
+            ("Clear thumbnails", self.clear_thumbnail_cache),
+        ]:
+            button = QPushButton(label)
+            button.clicked.connect(slot)
+            cache_row.addWidget(button)
+        cache_row.addStretch()
+        layout.addLayout(cache_row)
+
+        cache_note = QLabel(
+            "Dragging or opening a remote file keeps a local copy here so the other "
+            "application receives a real Windows file, never a web address. Clearing "
+            "the cache is safe; files are staged again the next time they are needed."
+        )
+        cache_note.setWordWrap(True)
+        cache_note.setStyleSheet("color: #5c6473;")
+        layout.addWidget(cache_note)
 
         note = QLabel(
             "Each device has its own certificate. Peers pin it when they pair, so an "
@@ -786,6 +870,33 @@ class MainWindow(QMainWindow):
         self.refresh_devices()
         self.refresh_shares()
         self.refresh_transfers()
+        self.refresh_cache_summary()
+
+    # ------------------------------------------------------------------ cache
+
+    def refresh_cache_summary(self) -> None:
+        staged, staged_bytes = self.stager.usage()
+        thumbnails = self.thumbnails.size_bytes()
+        self.cache_label.setText(
+            f"{self.stager.root}\n"
+            f"{staged} staged file(s), {format_size(staged_bytes)} — "
+            f"thumbnails {format_size(thumbnails)}"
+        )
+
+    def open_cache_folder(self) -> None:
+        self.stager.root.mkdir(parents=True, exist_ok=True)
+        open_local_file(self.stager.root)
+
+    def clear_staging_cache(self) -> None:
+        removed = self.stager.clear()
+        self.entry_model.set_entries(self.entry_model.entries())
+        self.refresh_cache_summary()
+        self.status_line.showMessage(f"Cleared {removed} staged file(s).", 6000)
+
+    def clear_thumbnail_cache(self) -> None:
+        removed = self.thumbnails.clear()
+        self.refresh_cache_summary()
+        self.status_line.showMessage(f"Cleared {removed} thumbnail(s).", 6000)
 
     # -------------------------------------------------------------- my device
 
@@ -1041,7 +1152,9 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------------- browser
 
-    def open_device(self, device: UnifiedDevice) -> None:
+    def open_device(self, device: UnifiedDevice, remember: bool = True) -> None:
+        if remember and self.current_device is not None:
+            self._remember()
         self.current_device = device
         self.current_share = None
         self.current_path = ""
@@ -1051,6 +1164,7 @@ class MainWindow(QMainWindow):
         self.browser_status.setText(f"Loading shared folders on {device.name}…")
         self.entry_model.set_entries([])
         self._update_breadcrumb()
+        self._update_navigation_buttons()
 
         client = self._client_for(device)
         self.runner.run(client.shares, self._shares_loaded, self._browser_failed)
@@ -1069,7 +1183,7 @@ class MainWindow(QMainWindow):
             for share in shares
         ]
         self.entry_model.set_entries(entries)
-        self.entry_view.set_drops_enabled(False)
+        self._set_drops_enabled(False)
         name = self.current_device.name if self.current_device else "device"
         self.browser_status.setText(
             f"{len(entries)} shared folder(s) on {name}. Open one to see its files."
@@ -1078,13 +1192,16 @@ class MainWindow(QMainWindow):
         )
         self._update_breadcrumb()
 
-    def load_folder(self, share: dict, path: str) -> None:
+    def load_folder(self, share: dict, path: str, remember: bool = True) -> None:
         if self.current_device is None:
             return
+        if remember:
+            self._remember()
         self.current_share = share
         self.current_path = path
         self.search_box.clear()
         self.browser_status.setText("Loading…")
+        self._update_navigation_buttons()
         client = self._client_for(self.current_device)
         share_id = share["share_id"]
         self.runner.run(
@@ -1094,7 +1211,7 @@ class MainWindow(QMainWindow):
     def _folder_loaded(self, entries: list[dict]) -> None:
         self.entry_model.set_entries(entries)
         writable = "w" in (self.current_share or {}).get("permissions", "")
-        self.entry_view.set_drops_enabled(writable)
+        self._set_drops_enabled(writable)
         files = sum(1 for entry in entries if entry.get("kind") == "file")
         folders = len(entries) - files
         hint = f"{folders} folder(s), {files} file(s)."
@@ -1104,6 +1221,7 @@ class MainWindow(QMainWindow):
             hint = f"{hint}  This shared folder is read-only."
         self.browser_status.setText(hint)
         self._update_breadcrumb()
+        self.load_thumbnails()
 
     def _browser_failed(self, message: str) -> None:
         self.browser_status.setText(message)
@@ -1113,9 +1231,9 @@ class MainWindow(QMainWindow):
         if self.current_device is None:
             return
         if self.current_share is None:
-            self.open_device(self.current_device)
+            self.open_device(self.current_device, remember=False)
         else:
-            self.load_folder(self.current_share, self.current_path)
+            self.load_folder(self.current_share, self.current_path, remember=False)
 
     def _update_breadcrumb(self) -> None:
         segments = [self.current_device.name if self.current_device else "Device"]
@@ -1148,8 +1266,273 @@ class MainWindow(QMainWindow):
         else:
             self.load_folder(self.current_share, "/".join(parts[:-1]))
 
+    def _install_browser_shortcuts(self) -> None:
+        """Explorer's keys, on both views."""
+        for view in (self.entry_view, self.icon_view):
+            QShortcut(QKeySequence(Qt.Key.Key_F2), view, self.rename_selection)
+            QShortcut(QKeySequence(Qt.Key.Key_Delete), view, self.delete_selection)
+            QShortcut(QKeySequence(Qt.Key.Key_Backspace), view, self.navigate_back)
+            QShortcut(QKeySequence.StandardKey.Refresh, view, self.reload_current_folder)
+            QShortcut(QKeySequence.StandardKey.Copy, view, self.copy_paths_to_clipboard)
+            QShortcut(QKeySequence(Qt.Key.Key_Return), view, self.activate_entry)
+            QShortcut(QKeySequence(Qt.Key.Key_Enter), view, self.activate_entry)
+
+    @property
+    def active_view(self) -> QAbstractItemView:
+        """isHidden(), not isVisible(): the latter is false while the window is closed."""
+        return self.entry_view if self.icon_view.isHidden() else self.icon_view
+
+    def _set_drops_enabled(self, enabled: bool) -> None:
+        self.entry_view.set_drops_enabled(enabled)
+        self.icon_view.set_drops_enabled(enabled)
+
+    def set_view_mode(self, index: int) -> None:
+        index = max(0, min(index, len(VIEW_MODES) - 1))
+        if self.view_box.currentIndex() != index:
+            # Keep the combo in step when the mode is set from code or a
+            # shortcut. That re-enters here with the index already matching, so
+            # the work below happens exactly once either way.
+            self.view_box.setCurrentIndex(index)
+            return
+        _label, icon_size = VIEW_MODES[index]
+        if icon_size == 0:
+            self.icon_view.hide()
+            self.entry_view.show()
+            return
+        self.entry_view.hide()
+        self.icon_view.setIconSize(QSize(icon_size, icon_size))
+        if icon_size <= 32:
+            # Explorer's "Small icons": name beside the icon, columns wrapping
+            # downwards. Under the icon there is simply not room for a name.
+            self.icon_view.setViewMode(QListView.ViewMode.ListMode)
+            self.icon_view.setFlow(QListView.Flow.TopToBottom)
+            self.icon_view.setWrapping(True)
+            self.icon_view.setSpacing(2)
+            self.icon_view.setGridSize(QSize(230, icon_size + 10))
+        else:
+            self.icon_view.setViewMode(QListView.ViewMode.IconMode)
+            self.icon_view.setFlow(QListView.Flow.LeftToRight)
+            self.icon_view.setWrapping(True)
+            self.icon_view.setSpacing(10)
+            # Wide enough for a readable name under the icon, not just the icon.
+            self.icon_view.setGridSize(QSize(max(icon_size + 60, 120), icon_size + 56))
+        self.icon_view.show()
+        self.load_thumbnails()
+
+    # ------------------------------------------------------------ navigation
+
+    def _remember(self) -> None:
+        """Push the current location so Back can return to it."""
+        if self._navigating:
+            return
+        if self.current_device is not None:
+            self._history.append((self.current_share, self.current_path))
+            self._forward.clear()
+        self._update_navigation_buttons()
+
+    def _update_navigation_buttons(self) -> None:
+        self.back_button.setEnabled(bool(self._history))
+        self.forward_button.setEnabled(bool(self._forward))
+        self.up_button.setEnabled(self.current_share is not None)
+
+    def _go_to(self, share: dict | None, path: str) -> None:
+        self._navigating = True
+        try:
+            if share is None:
+                if self.current_device is not None:
+                    self.open_device(self.current_device, remember=False)
+            else:
+                self.load_folder(share, path, remember=False)
+        finally:
+            self._navigating = False
+        self._update_navigation_buttons()
+
+    def go_back(self) -> None:
+        if not self._history:
+            return
+        self._forward.append((self.current_share, self.current_path))
+        share, path = self._history.pop()
+        self._go_to(share, path)
+
+    def go_forward(self) -> None:
+        if not self._forward:
+            return
+        self._history.append((self.current_share, self.current_path))
+        share, path = self._forward.pop()
+        self._go_to(share, path)
+
+    # --------------------------------------------------------------- staging
+
+    def _remote_for(self, entry: dict) -> RemoteFile | None:
+        device, share = self.current_device, self.current_share
+        if device is None or share is None:
+            return None
+        return entry_to_remote(entry, device.id, device.name, share["share_id"])
+
+    def _stage_runner(self, remote: RemoteFile):
+        """A TransferManager runner that downloads into the staging cache."""
+        device = self.current_device
+        share = self.current_share
+        if device is None or share is None:
+            return None
+        client = self._client_for(device)
+        share_id = share["share_id"]
+        stager = self.stager
+
+        def run(transfer, control) -> None:
+            transfer.size = remote.size
+
+            def fetch(partial: Path) -> None:
+                digest = None
+                try:
+                    digest = client.checksum(share_id, remote.path)
+                except Exception:  # noqa: BLE001 - an older peer has no checksums
+                    digest = None
+                with client.open_stream(share_id, remote.path) as response, partial.open("wb") as out:
+                    for chunk in response.iter_bytes(512 * 1024):
+                        out.write(chunk)
+                        self.transfers.advance(transfer, control, len(chunk))
+                if digest:
+                    from ..files import sha256_of
+
+                    if sha256_of(partial).lower() != digest.lower():
+                        raise RuntimeError(f"{remote.name} failed its SHA-256 check.")
+
+            stager.stage_file(remote, fetch, force=True)
+
+        return run
+
+    def stage_entries(self, remotes: list[RemoteFile]) -> None:
+        """Queue staging jobs so the next drag has local files to offer."""
+        device = self.current_device
+        if device is None:
+            return
+        for remote in remotes:
+            runner = self._stage_runner(remote)
+            if runner is None:
+                continue
+            self.transfers.submit(
+                kind="stage",
+                filename=remote.name,
+                source=f"{device.name}/{(self.current_share or {}).get('name', '')}",
+                destination="Ready to drag",
+                size=remote.size,
+                runner=runner,
+            )
+
+    def paths_for_drag(self) -> list[Path] | None:
+        """Local paths for the selection, or None while they are being prepared."""
+        entries = [entry for entry in self._selected_entries() if entry.get("kind") == "file"]
+        remotes = [remote for remote in map(self._remote_for, entries) if remote is not None]
+        if not remotes:
+            return None
+
+        plan = plan_drag(self.stager, remotes)
+        if plan.can_drag_now:
+            self.status_line.showMessage(plan.summary(), 4000)
+            return plan.ready
+
+        self.stage_entries(plan.pending)
+        self.status_line.showMessage(
+            f"{plan.summary()} Drag again once it appears in Transfers as completed.", 9000
+        )
+        return None
+
+    def copy_paths_to_clipboard(self) -> None:
+        entries = self._selected_entries()
+        if not entries:
+            return
+        share = (self.current_share or {}).get("name", "")
+        device = self.current_device.name if self.current_device else ""
+        lines = [f"{device}/{share}/{entry.get('path', entry.get('name', ''))}" for entry in entries]
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText("\n".join(lines))
+        self.status_line.showMessage("Path copied", 4000)
+
+    def copy_staged_paths_to_clipboard(self) -> None:
+        entries = [entry for entry in self._selected_entries() if entry.get("kind") == "file"]
+        remotes = [remote for remote in map(self._remote_for, entries) if remote is not None]
+        paths = [str(path) for path in plan_drag(self.stager, remotes).ready]
+        if not paths:
+            self._warn("Not staged yet", "Open or drag the file once, then its local path exists.")
+            return
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText("\n".join(paths))
+        self.status_line.showMessage("Local staged path copied", 4000)
+
+    # ------------------------------------------------------------ thumbnails
+
+    def load_thumbnails(self) -> None:
+        """Show previews for the images in view, off the GUI thread.
+
+        A cached preview costs nothing, so it is always applied. Generating one
+        means downloading the image, so that only happens in an icon view, and
+        only for a bounded number of files: browsing a folder of 500 photos must
+        not quietly pull half a gigabyte across the network.
+        """
+        device, share = self.current_device, self.current_share
+        if device is None or share is None:
+            return
+        may_download = self.active_view is self.icon_view
+        budget = THUMBNAIL_BUDGET
+        for entry in self.entry_model.image_entries():
+            remote = self._remote_for(entry)
+            if remote is None:
+                continue
+            cached = self.thumbnails.cached(remote)
+            if cached is not None:
+                self.entry_model.set_thumbnail(remote.path, QIcon(cached))
+                continue
+            if not may_download or budget <= 0 or remote.path in self._thumbnails_pending:
+                continue
+            if remote.size is not None and remote.size > THUMBNAIL_MAX_BYTES:
+                continue  # too big to be worth fetching just for a preview
+            budget -= 1
+            self._thumbnails_pending.add(remote.path)
+            self._queue_thumbnail(remote)
+
+    def _queue_thumbnail(self, remote: RemoteFile) -> None:
+        device, share = self.current_device, self.current_share
+        if device is None or share is None:
+            return
+        client = self._client_for(device)
+        share_id = share["share_id"]
+
+        def work() -> str:
+            local = self.stager.get_local_path(remote)
+            if local is None:
+
+                def fetch(partial: Path) -> None:
+                    with (
+                        client.open_stream(share_id, remote.path) as response,
+                        partial.open("wb") as out,
+                    ):
+                        for chunk in response.iter_bytes(512 * 1024):
+                            out.write(chunk)
+
+                local = self.stager.stage_file(remote, fetch)
+            return str(local)
+
+        def ready(path: object) -> None:
+            # Building the pixmap touches QPixmap, so it happens on the GUI thread.
+            self._thumbnails_pending.discard(remote.path)
+            pixmap = self.thumbnails.build(remote, Path(str(path)))
+            if pixmap is not None:
+                self.entry_model.set_thumbnail(remote.path, QIcon(pixmap))
+
+        def failed(_message: str) -> None:
+            self._thumbnails_pending.discard(remote.path)
+
+        self.runner.run(work, ready, failed)
+
     def _selected_entries(self) -> list[dict]:
-        rows = {index.row() for index in self.entry_view.selectionModel().selectedRows()}
+        """Whichever view is on screen — details and icons share one selection model."""
+        model = self.active_view.selectionModel()
+        if model is None:
+            return []
+        rows = {index.row() for index in model.selectedIndexes()}
         entries = [self.entry_proxy.entry_at(row) for row in sorted(rows)]
         return [entry for entry in entries if entry]
 
@@ -1180,9 +1563,13 @@ class MainWindow(QMainWindow):
         deletable = "d" in (self.current_share or {}).get("permissions", "")
         is_share = entry.get("kind") == "share"
 
+        is_file = entry.get("kind") == "file"
+
         menu = QMenu(self)
         menu.addAction("Open", self.activate_entry)
-        download = menu.addAction("Download…", self.download_selection)
+        open_with = menu.addAction("Open with default app", self.open_entry)
+        open_with.setEnabled(is_file)
+        download = menu.addAction("Download to…", self.download_selection)
         download.setEnabled(not is_share)
         upload_folder = menu.addAction("Upload folder…", self.upload_folder_into_current)
         upload_folder.setEnabled(writable and not is_share)
@@ -1202,29 +1589,70 @@ class MainWindow(QMainWindow):
         delete = menu.addAction("Delete", self.delete_selection)
         delete.setEnabled(deletable and not is_share)
         menu.addSeparator()
+        prepare = menu.addAction("Prepare for drag", self.prepare_selection_for_drag)
+        prepare.setEnabled(is_file)
+        menu.addAction("Copy remote path", self.copy_paths_to_clipboard)
+        staged = menu.addAction("Copy local staged path", self.copy_staged_paths_to_clipboard)
+        staged.setEnabled(is_file)
+        menu.addSeparator()
+        menu.addAction("Refresh", self.reload_current_folder)
         menu.addAction("Properties", self.show_properties)
-        menu.exec(self.entry_view.viewport().mapToGlobal(position))
+        viewport = self.active_view.viewport()
+        menu.exec(viewport.mapToGlobal(position) if viewport else position)
 
     # ------------------------------------------------------------- operations
 
     def open_entry(self) -> None:
-        """Download to a temporary file, then hand it to the OS default handler."""
+        """Stage the remote file locally, verify it, then let Windows open it.
+
+        The same staged copy backs drag-and-drop, so opening a file once also
+        makes it draggable immediately.
+        """
         entry = self._selected_entry()
         device, share = self.current_device, self.current_share
         if not entry or entry.get("kind") != "file" or not share or device is None:
             return
-        destination = Path(tempfile.mkdtemp(prefix="lanlink-")) / entry["name"]
-        client = self._client_for(device)
-        share_id = share["share_id"]
+        remote = self._remote_for(entry)
+        if remote is None:
+            return
+
+        local = self.stager.get_local_path(remote)
+        if local is not None:
+            open_local_file(local)
+            self.status_line.showMessage(f"Opened {local}", 6000)
+            return
+
+        runner = self._stage_runner(remote)
+        if runner is None:
+            return
         transfer = self.transfers.submit(
             kind="open",
-            filename=entry["name"],
-            source=device.name,
+            filename=remote.name,
+            source=f"{device.name}/{share.get('name', '')}",
             destination="Open locally",
-            size=entry.get("size"),
-            runner=download_runner(self.transfers, client, share_id, entry["path"], destination),
+            size=remote.size,
+            runner=runner,
         )
-        self._after_transfer(transfer, lambda: open_local_file(destination))
+        self._after_transfer(transfer, lambda: self._open_staged(remote))
+
+    def _open_staged(self, remote: RemoteFile) -> None:
+        local = self.stager.get_local_path(remote)
+        if local is None:
+            self._warn("Could not open", f"{remote.name} did not finish staging.")
+            return
+        open_local_file(local)
+        self.status_line.showMessage(f"Opened {local}", 6000)
+
+    def prepare_selection_for_drag(self) -> None:
+        """Stage the selection up front so the next drag starts instantly."""
+        entries = [entry for entry in self._selected_entries() if entry.get("kind") == "file"]
+        remotes = [remote for remote in map(self._remote_for, entries) if remote is not None]
+        plan = plan_drag(self.stager, remotes)
+        if not plan.pending:
+            self.status_line.showMessage("Already prepared — drag it anywhere.", 5000)
+            return
+        self.stage_entries(plan.pending)
+        self.status_line.showMessage(plan.summary(), 6000)
 
     def download_selection(self) -> None:
         entries = [entry for entry in self._selected_entries() if entry.get("kind") in {"file", "folder"}]
@@ -1651,6 +2079,9 @@ class MainWindow(QMainWindow):
         self.slow_timer.stop()
         self.transfers.shutdown()
         self.runner.wait(2000)
+        # Sweep expired staged copies; anything still in use is left alone.
+        with contextlib.suppress(OSError):
+            self.stager.cleanup()
         for client in self._clients.values():
             client.close()
         self.discovery.stop()

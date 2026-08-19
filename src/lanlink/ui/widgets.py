@@ -5,13 +5,17 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QRect, Qt, Signal
-from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QPainter
+from PySide6.QtGui import QDrag, QDragEnterEvent, QDragMoveEvent, QDropEvent, QPainter
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QHBoxLayout,
+    QListView,
     QPushButton,
     QStyle,
     QStyledItemDelegate,
@@ -20,6 +24,8 @@ from PySide6.QtWidgets import (
     QTreeView,
     QWidget,
 )
+
+from .dragdrop import build_mime_data, local_paths_from
 
 
 def open_local_file(path: Path) -> None:
@@ -37,23 +43,34 @@ def open_local_file(path: Path) -> None:
         subprocess.Popen(["xdg-open", target])  # noqa: S603, S607
 
 
-class DropTreeView(QTreeView):
-    """A tree view that accepts dropped local files for upload."""
+if TYPE_CHECKING:  # pragma: no cover - typing only
 
-    filesDropped = Signal(list)
+    class _ViewBase(QAbstractItemView):
+        """Stands in for the Qt view the mixin is combined with."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setAcceptDrops(True)
-        self.setDragDropMode(QTreeView.DragDropMode.DropOnly)
-        self.setRootIsDecorated(False)
-        self.setAlternatingRowColors(True)
-        self.setSelectionBehavior(QTreeView.SelectionBehavior.SelectRows)
-        self.setSelectionMode(QTreeView.SelectionMode.ExtendedSelection)
-        self.setEditTriggers(QTreeView.EditTrigger.NoEditTriggers)
-        self.setSortingEnabled(True)
-        self.setUniformRowHeights(True)
+else:
+    _ViewBase = object
+
+
+class FileDragDropView(_ViewBase):
+    """Shared drag-out / drop-in behaviour for the two browser views.
+
+    At runtime this is a plain mixin; the concrete class below supplies the Qt
+    base. Signals are declared there too — PySide6 only registers a Signal
+    defined directly on a QObject subclass.
+    """
+
+    filesDropped: Signal  # noqa: N815 - Qt naming
+    dragRequested: Signal  # noqa: N815 - Qt naming
+
+    def _init_drag_drop(self) -> None:
+        # The provider returns local paths to drag, or None when the selection
+        # still has to be staged first.
+        self.drag_provider: Callable[[], list[Path] | None] | None = None
         self._drops_enabled = True
+        self.setAcceptDrops(True)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
 
     def set_drops_enabled(self, enabled: bool) -> None:
         self._drops_enabled = enabled
@@ -74,20 +91,71 @@ class DropTreeView(QTreeView):
         else:
             event.ignore()
 
+    def startDrag(self, supportedActions: Qt.DropAction) -> None:  # noqa: N802
+        """Begin a native drag of the selected remote files.
+
+        Qt wants the data now, so a selection that is not staged yet cannot be
+        dragged this instant. The provider kicks off staging and returns None;
+        the next drag, once it has finished, carries the local paths.
+        """
+        if self.drag_provider is None:
+            return
+        paths = self.drag_provider()
+        self.dragRequested.emit()
+        if not paths:
+            return
+
+        drag = QDrag(self)
+        drag.setMimeData(build_mime_data(paths))
+        drag.exec(Qt.DropAction.CopyAction, Qt.DropAction.CopyAction)
+
     def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
         if not self._has_files(event):
             event.ignore()
             return
-        paths = [
-            Path(url.toLocalFile())
-            for url in event.mimeData().urls()
-            if url.isLocalFile() and Path(url.toLocalFile()).exists()
-        ]
+        paths = local_paths_from(event.mimeData())
         if paths:
             self.filesDropped.emit(paths)
             event.acceptProposedAction()
         else:
             event.ignore()
+
+
+class DropTreeView(FileDragDropView, QTreeView):
+    """Details view: accepts local files dropped in, drags remote files out."""
+
+    filesDropped = Signal(list)
+    dragRequested = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._init_drag_drop()
+        self.setRootIsDecorated(False)
+        self.setAlternatingRowColors(True)
+        self.setSelectionBehavior(QTreeView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QTreeView.SelectionMode.ExtendedSelection)
+        self.setEditTriggers(QTreeView.EditTrigger.NoEditTriggers)
+        self.setSortingEnabled(True)
+        self.setUniformRowHeights(True)
+
+
+class DropListView(FileDragDropView, QListView):
+    """Icon view: same drag/drop contract, different presentation."""
+
+    filesDropped = Signal(list)
+    dragRequested = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._init_drag_drop()
+        self.setViewMode(QListView.ViewMode.IconMode)
+        self.setResizeMode(QListView.ResizeMode.Adjust)
+        self.setMovement(QListView.Movement.Static)
+        self.setSelectionMode(QListView.SelectionMode.ExtendedSelection)
+        self.setEditTriggers(QListView.EditTrigger.NoEditTriggers)
+        self.setWordWrap(True)
+        self.setSpacing(10)
+        self.setUniformItemSizes(True)
 
 
 class ProgressDelegate(QStyledItemDelegate):

@@ -12,10 +12,11 @@ from PySide6.QtCore import (
     QSortFilterProxyModel,
     Qt,
 )
+from PySide6.QtGui import QIcon
 
-COLUMNS = ("Name", "Size", "Modified", "Type")
-KIND_ICON = {"share": "\U0001f4c1", "folder": "\U0001f4c1", "file": "\U0001f4c4"}
-KIND_LABEL = {"share": "Shared folder", "folder": "Folder", "file": "File"}
+from ..filetypes import describe, icon_for
+
+COLUMNS = ("Name", "Size", "Type", "Modified")
 
 
 def format_size(size: int | None) -> str:
@@ -40,10 +41,14 @@ class RemoteEntryModel(QAbstractTableModel):
 
     EntryRole = int(Qt.ItemDataRole.UserRole) + 1
     SortRole = int(Qt.ItemDataRole.UserRole) + 2
+    IconRole = int(Qt.ItemDataRole.UserRole) + 3
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._entries: list[dict] = []
+        # path -> thumbnail, filled in as they are generated off-thread.
+        self._thumbnails: dict[str, QIcon] = {}
+        self.icons_enabled = True
 
     def rowCount(self, parent: QModelIndex | QPersistentModelIndex | None = None) -> int:  # noqa: N802
         if parent is not None and parent.isValid():
@@ -68,36 +73,70 @@ class RemoteEntryModel(QAbstractTableModel):
         entry = self._entries[index.row()]
         column = index.column()
         kind = entry.get("kind", "file")
+        name = str(entry.get("name", ""))
 
         if role == Qt.ItemDataRole.DisplayRole:
             if column == 0:
-                return f"{KIND_ICON.get(kind, '')}  {entry.get('name', '')}"
+                return name
             if column == 1:
                 return format_size(entry.get("size"))
             if column == 2:
-                return format_time(entry.get("modified_at"))
+                return describe(name, kind).label
             if column == 3:
-                return KIND_LABEL.get(kind, kind)
+                return format_time(entry.get("modified_at"))
+        elif role == Qt.ItemDataRole.DecorationRole and column == 0 and self.icons_enabled:
+            thumbnail = self._thumbnails.get(str(entry.get("path", "")))
+            return thumbnail if thumbnail is not None else self._icon_for(entry)
+        elif role == self.IconRole:
+            return icon_for(name, kind)
         elif role == self.SortRole:
             # Folders always sort above files, whichever column is active.
             group = 0 if kind in {"share", "folder"} else 1
             if column == 1:
                 return (group, entry.get("size") or 0)
             if column == 2:
-                return (group, entry.get("modified_at") or 0.0)
+                return (group, describe(name, kind).label.lower())
             if column == 3:
-                return (group, kind)
-            return (group, str(entry.get("name", "")).lower())
+                return (group, entry.get("modified_at") or 0.0)
+            return (group, name.lower())
         elif role == self.EntryRole:
             return entry
+        elif role == Qt.ItemDataRole.ToolTipRole:
+            return f"{name}\n{describe(name, kind).label}\n{format_size(entry.get('size'))}"
         elif role == Qt.ItemDataRole.TextAlignmentRole and column == 1:
             return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         return None
 
+    def _icon_for(self, entry: dict) -> QIcon | None:
+        from .thumbnails import glyph_icon
+
+        return glyph_icon(str(entry.get("name", "")), str(entry.get("kind", "file")))
+
+    def set_thumbnail(self, path: str, icon: QIcon) -> None:
+        """Swap a generic icon for a real preview once it has been generated."""
+        self._thumbnails[path] = icon
+        for row, entry in enumerate(self._entries):
+            if entry.get("path") == path:
+                position = self.index(row, 0)
+                self.dataChanged.emit(position, position, [Qt.ItemDataRole.DecorationRole])
+                break
+
+    def thumbnail_count(self) -> int:
+        return len(self._thumbnails)
+
     def set_entries(self, entries: list[dict]) -> None:
         self.beginResetModel()
         self._entries = list(entries)
+        self._thumbnails.clear()
         self.endResetModel()
+
+    def image_entries(self) -> list[dict]:
+        """Rows worth generating a thumbnail for."""
+        return [
+            entry
+            for entry in self._entries
+            if entry.get("kind") == "file" and describe(str(entry.get("name", ""))).can_thumbnail
+        ]
 
     def entry_at(self, row: int) -> dict | None:
         if 0 <= row < len(self._entries):
@@ -120,6 +159,14 @@ class EntryFilterProxy(QSortFilterProxyModel):
     def set_search(self, text: str) -> None:
         self._needle = text.strip().lower()
         self.invalidate()
+
+    def matches(self, entry: dict) -> bool:
+        """Name *or* type, so 'step' finds STEP models as well as step*.* files."""
+        if not self._needle:
+            return True
+        name = str(entry.get("name", "")).lower()
+        label = describe(str(entry.get("name", "")), str(entry.get("kind", "file"))).label.lower()
+        return self._needle in name or self._needle in label
 
     def lessThan(  # noqa: N802
         self,
@@ -145,9 +192,7 @@ class EntryFilterProxy(QSortFilterProxyModel):
             return True
         model = self.sourceModel()
         entry = model.entry_at(source_row) if isinstance(model, RemoteEntryModel) else None
-        if entry is None:
-            return True
-        return self._needle in str(entry.get("name", "")).lower()
+        return True if entry is None else self.matches(entry)
 
     def entry_at(self, proxy_row: int) -> dict | None:
         model = self.sourceModel()
