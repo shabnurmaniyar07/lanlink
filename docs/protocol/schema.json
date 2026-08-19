@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lanlink.local/protocol/v1/schema.json",
+  "title": "LanLink v1 response bodies",
+  "description": "Every JSON object the v1 API returns. FastAPI declares these handlers as plain dicts, so the generated openapi.yaml cannot describe the response bodies; this file does, and tests/test_protocol_contract.py validates real server responses against it. Clients MUST ignore unknown members: additive fields are not a breaking change.",
+  "$defs": {
+    "Device": {
+      "type": "object",
+      "description": "Public identity of a LanLink node. Never contains a token or a private key.",
+      "required": ["id", "name", "hostname", "platform", "version", "fingerprint"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "description": "Stable device id, a UUID4 on first run. Survives rename and address change."},
+        "name": {"type": "string", "description": "Owner-chosen display name. Not unique and not an identity."},
+        "hostname": {"type": "string"},
+        "platform": {"type": "string", "description": "platform.system(): Windows, Linux, Darwin, or Android for a native client."},
+        "version": {"type": "string", "description": "LanLink application version, not the protocol version."},
+        "fingerprint": {
+          "type": "string",
+          "description": "SHA-256 of the device certificate in DER form, lowercase hex, 64 characters. Empty only when TLS is disabled.",
+          "pattern": "^([0-9a-f]{64})?$"
+        }
+      }
+    },
+
+    "HealthResponse": {
+      "type": "object",
+      "description": "GET /health. The only unauthenticated endpoint besides /v1/device and /v1/pair.",
+      "required": ["status", "device"],
+      "properties": {
+        "status": {"const": "ok"},
+        "device": {"$ref": "#/$defs/Device"}
+      }
+    },
+
+    "DeviceResponse": {
+      "type": "object",
+      "description": "GET /v1/device. A client polls this to see whether the owner has switched pairing on.",
+      "required": ["device", "pairing_armed"],
+      "properties": {
+        "device": {"$ref": "#/$defs/Device"},
+        "pairing_armed": {"type": "boolean", "description": "True only while the owner has pairing mode on and the code has not expired."}
+      }
+    },
+
+    "PairResponse": {
+      "type": "object",
+      "description": "POST /v1/pair, 200 only. The token is shown once and never again.",
+      "required": ["token", "device"],
+      "properties": {
+        "token": {"type": "string", "minLength": 32, "description": "URL-safe base64 of 32 random bytes. The server stores only its SHA-256."},
+        "device": {"$ref": "#/$defs/Device"}
+      }
+    },
+
+    "Share": {
+      "type": "object",
+      "description": "One folder the owner explicitly added. Whole disks are never shared.",
+      "required": ["id", "name", "permissions", "available"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^share_[0-9a-f]{12}$"},
+        "name": {"type": "string", "description": "Display name. The real filesystem path is never sent."},
+        "permissions": {
+          "type": "string",
+          "description": "Subset of r/w/d in that order. r=read, w=write, d=delete. Setting permissions always re-adds r, so in practice this is one of r, rw, rd, rwd.",
+          "pattern": "^r?w?d?$"
+        },
+        "available": {"type": "boolean", "description": "False when the folder is missing right now, e.g. an unplugged drive. The share stays configured."}
+      }
+    },
+
+    "SharesResponse": {
+      "type": "object",
+      "required": ["shares"],
+      "properties": {"shares": {"type": "array", "items": {"$ref": "#/$defs/Share"}}}
+    },
+
+    "Entry": {
+      "type": "object",
+      "description": "One row of a folder listing. Unfinished uploads (*.lanlink-part) are never listed.",
+      "required": ["name", "path", "kind", "size", "modified_at"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "description": "Leaf name only."},
+        "path": {"type": "string", "description": "Share-relative, POSIX separators, no leading slash. This is the value to send back as ?path=."},
+        "kind": {"enum": ["file", "folder"]},
+        "size": {"type": ["integer", "null"], "minimum": 0, "description": "Bytes for a file, null for a folder."},
+        "modified_at": {"type": "number", "description": "Unix epoch seconds, fractional. Not a string."}
+      }
+    },
+
+    "ListResponse": {
+      "type": "object",
+      "description": "GET /v1/shares/{share_id}/list. Sorted folders-first then case-insensitive by name.",
+      "required": ["entries"],
+      "properties": {"entries": {"type": "array", "items": {"$ref": "#/$defs/Entry"}}}
+    },
+
+    "ChecksumResponse": {
+      "type": "object",
+      "description": "GET /v1/shares/{share_id}/checksum. Computed on demand; large files take time.",
+      "required": ["sha256", "path"],
+      "properties": {
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "path": {"type": "string", "description": "Echo of the requested path."}
+      }
+    },
+
+    "PartialResponse": {
+      "type": "object",
+      "description": "GET /v1/shares/{share_id}/partial. How many bytes of an interrupted upload survived.",
+      "required": ["received", "complete", "size"],
+      "properties": {
+        "received": {"type": "integer", "minimum": 0, "description": "Resume the PUT from this offset."},
+        "complete": {"type": "boolean", "description": "True when the finished file already exists; a new upload under that name will be refused with 409."},
+        "size": {"type": ["integer", "null"], "description": "Size of the finished file when complete is true, otherwise null."}
+      }
+    },
+
+    "UploadResponse": {
+      "type": "object",
+      "description": "POST /v1/uploads/{share_id}, the multipart form upload.",
+      "required": ["path", "bytes"],
+      "properties": {
+        "path": {"type": "string", "description": "Stored leaf name, which may differ from the name that was sent."},
+        "bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+
+    "StreamUploadResponse": {
+      "type": "object",
+      "description": "PUT /v1/files/{share_id}. complete=false when finalize=false was sent.",
+      "required": ["path", "received", "complete"],
+      "properties": {
+        "path": {"type": "string"},
+        "received": {"type": "integer", "minimum": 0, "description": "Total bytes now held, including everything sent before this request."},
+        "complete": {"type": "boolean"},
+        "bytes": {"type": "integer", "minimum": 0, "description": "Present only when complete is true: the size of the published file."}
+      }
+    },
+
+    "FinalizeResponse": {
+      "type": "object",
+      "description": "POST /v1/shares/{share_id}/finalize.",
+      "required": ["path", "bytes", "complete"],
+      "properties": {
+        "path": {"type": "string"},
+        "bytes": {"type": "integer", "minimum": 0},
+        "complete": {"const": true}
+      }
+    },
+
+    "NamedResult": {
+      "type": "object",
+      "description": "POST .../folders and POST .../rename.",
+      "required": ["result", "name"],
+      "properties": {
+        "result": {"const": "ok"},
+        "name": {"type": "string", "description": "Leaf name as it was actually created or renamed."}
+      }
+    },
+
+    "DeleteResponse": {
+      "type": "object",
+      "description": "DELETE /v1/shares/{share_id}/entries.",
+      "required": ["result", "kind"],
+      "properties": {
+        "result": {"const": "ok"},
+        "kind": {"enum": ["file", "folder"]}
+      }
+    },
+
+    "Properties": {
+      "type": "object",
+      "description": "GET /v1/shares/{share_id}/properties. path=\"\" describes the share root itself.",
+      "required": [
+        "name", "path", "kind", "size", "modified_at", "created_at",
+        "accessed_at", "extension", "read_only", "share", "share_permissions"
+      ],
+      "properties": {
+        "name": {"type": "string", "description": "Share name when the share root was requested, otherwise the leaf name."},
+        "path": {"type": "string", "description": "Empty string for the share root."},
+        "kind": {"enum": ["file", "folder"]},
+        "size": {"type": ["integer", "null"]},
+        "modified_at": {"type": "number"},
+        "created_at": {"type": "number", "description": "st_ctime: creation on Windows, inode change on POSIX."},
+        "accessed_at": {"type": "number"},
+        "extension": {"type": "string", "description": "Lowercase, with the dot; empty for a folder."},
+        "read_only": {"type": "boolean", "description": "Filesystem writability on the serving device, which is separate from share permissions."},
+        "share": {"type": "string"},
+        "share_permissions": {"type": "string"},
+        "item_count": {
+          "type": "object",
+          "description": "Folders only.",
+          "required": ["folders", "files"],
+          "properties": {
+            "folders": {"type": "integer", "minimum": 0},
+            "files": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    },
+
+    "OperationResponse": {
+      "type": "object",
+      "description": "POST /v1/operations. Same-device copy or move between two shares on the responding node.",
+      "required": ["result", "path"],
+      "properties": {
+        "result": {"const": "ok"},
+        "path": {"type": "string", "description": "Share-relative path of the new file inside the destination share. Never absolute."}
+      }
+    },
+
+    "RevokeResponse": {
+      "type": "object",
+      "description": "DELETE /v1/pairings/{client_id}. A device may only revoke itself.",
+      "required": ["revoked"],
+      "properties": {"revoked": {"type": "boolean"}}
+    },
+
+    "Error": {
+      "type": "object",
+      "description": "Every 4xx except 422. detail is a sentence written for a person and may be shown as-is.",
+      "required": ["detail"],
+      "properties": {"detail": {"type": "string"}}
+    },
+
+    "ValidationError": {
+      "type": "object",
+      "description": "422 only, emitted by the request-model layer before any handler runs.",
+      "required": ["detail"],
+      "properties": {
+        "detail": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type", "loc", "msg"],
+            "properties": {
+              "type": {"type": "string"},
+              "loc": {"type": "array"},
+              "msg": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+
+    "MdnsTxt": {
+      "type": "object",
+      "description": "TXT record of _lanlink._tcp.local. All values are UTF-8 strings. A record without a non-empty id is ignored.",
+      "required": ["id", "name", "api", "platform", "version", "scheme", "fp"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "description": "Device id. Matches Device.id."},
+        "name": {"type": "string"},
+        "api": {"type": "string", "description": "Protocol family. \"v1\" for this document."},
+        "platform": {"type": "string"},
+        "version": {"type": "string"},
+        "scheme": {"enum": ["https", "http"], "description": "http appears only when the owner switched TLS off for troubleshooting."},
+        "fp": {
+          "type": "string",
+          "description": "First 32 hex characters of the certificate fingerprint. A hint for matching, NOT sufficient to pin: pin the full 64-character fingerprint from the invite or from the certificate the peer presents, confirmed by the owner.",
+          "pattern": "^([0-9a-f]{32})?$"
+        }
+      }
+    }
+  }
+}

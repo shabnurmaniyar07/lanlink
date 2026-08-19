@@ -1,0 +1,820 @@
+# GENERATED FILE - do not edit by hand.
+# Regenerate with: python tools/export_openapi.py
+# This is the LanLink v1 wire protocol exactly as src/lanlink/api.py implements it.
+components:
+  schemas:
+    Body_upload_v1_uploads__share_id__post:
+      properties:
+        file:
+          contentMediaType: application/octet-stream
+          title: File
+          type: string
+      required:
+      - file
+      title: Body_upload_v1_uploads__share_id__post
+      type: object
+    CopyMoveRequest:
+      properties:
+        destination_path:
+          default: ''
+          title: Destination Path
+          type: string
+        destination_share_id:
+          title: Destination Share Id
+          type: string
+        operation:
+          default: copy
+          enum:
+          - copy
+          - move
+          title: Operation
+          type: string
+        source_path:
+          default: ''
+          title: Source Path
+          type: string
+        source_share_id:
+          title: Source Share Id
+          type: string
+      required:
+      - source_share_id
+      - destination_share_id
+      title: CopyMoveRequest
+      type: object
+    CreateFolderRequest:
+      properties:
+        name:
+          maxLength: 255
+          minLength: 1
+          title: Name
+          type: string
+        path:
+          default: ''
+          title: Path
+          type: string
+      required:
+      - name
+      title: CreateFolderRequest
+      type: object
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          title: Detail
+          type: array
+      title: HTTPValidationError
+      type: object
+    PairRequest:
+      properties:
+        client_id:
+          maxLength: 128
+          minLength: 8
+          title: Client Id
+          type: string
+        client_name:
+          maxLength: 80
+          minLength: 1
+          title: Client Name
+          type: string
+        pair_code:
+          maxLength: 20
+          minLength: 6
+          pattern: ^[0-9]+$
+          title: Pair Code
+          type: string
+      required:
+      - client_id
+      - client_name
+      - pair_code
+      title: PairRequest
+      type: object
+    RenameRequest:
+      properties:
+        new_name:
+          maxLength: 255
+          minLength: 1
+          title: New Name
+          type: string
+        path:
+          minLength: 1
+          title: Path
+          type: string
+      required:
+      - path
+      - new_name
+      title: RenameRequest
+      type: object
+    ValidationError:
+      properties:
+        ctx:
+          title: Context
+          type: object
+        input:
+          title: Input
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          title: Location
+          type: array
+        msg:
+          title: Message
+          type: string
+        type:
+          title: Error Type
+          type: string
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+      type: object
+info:
+  description: Internal transport between paired LanLink devices on a local network. This API never serves
+    a user interface. Every deployment is HTTPS with a self-signed per-device certificate that peers pin
+    at pairing time.
+  title: LanLink v1
+  version: '1.0'
+openapi: 3.1.0
+paths:
+  /health:
+    get:
+      operationId: health_health_get
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Health Health Get
+                type: object
+          description: Successful Response
+      summary: Health
+  /v1/device:
+    get:
+      operationId: device_v1_device_get
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Device V1 Device Get
+                type: object
+          description: Successful Response
+      summary: Device
+  /v1/files/{share_id}:
+    get:
+      operationId: download_v1_files__share_id__get
+      parameters:
+      - in: path
+        name: share_id
+        required: true
+        schema:
+          title: Share Id
+          type: string
+      - in: query
+        name: path
+        required: true
+        schema:
+          title: Path
+          type: string
+      - in: header
+        name: Range
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Range
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: {}
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Download
+    put:
+      description: 'Raw resumable upload; never buffers a whole file.
+
+
+        Bytes land in a ``.lanlink-part`` sidecar. Only once the transfer
+
+        completes (and matches its checksum, when one is supplied) does the file
+
+        appear under its real name — so an interrupted transfer can never be
+
+        mistaken for a finished one.'
+      operationId: stream_upload_v1_files__share_id__put
+      parameters:
+      - in: path
+        name: share_id
+        required: true
+        schema:
+          title: Share Id
+          type: string
+      - in: query
+        name: path
+        required: false
+        schema:
+          default: ''
+          title: Path
+          type: string
+      - in: query
+        name: name
+        required: true
+        schema:
+          title: Name
+          type: string
+      - in: query
+        name: offset
+        required: false
+        schema:
+          default: 0
+          minimum: 0
+          title: Offset
+          type: integer
+      - in: query
+        name: finalize
+        required: false
+        schema:
+          default: true
+          title: Finalize
+          type: boolean
+      - in: query
+        name: sha256
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sha256
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Stream Upload V1 Files  Share Id  Put
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Stream Upload
+  /v1/operations:
+    post:
+      operationId: operation_v1_operations_post
+      parameters:
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CopyMoveRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Operation V1 Operations Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Operation
+  /v1/pair:
+    post:
+      operationId: pair_v1_pair_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PairRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Pair V1 Pair Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Pair
+  /v1/pairings/{client_id}:
+    delete:
+      operationId: revoke_pairing_v1_pairings__client_id__delete
+      parameters:
+      - in: path
+        name: client_id
+        required: true
+        schema:
+          title: Client Id
+          type: string
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Revoke Pairing V1 Pairings  Client Id  Delete
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Revoke Pairing
+  /v1/shares:
+    get:
+      operationId: shares_v1_shares_get
+      parameters:
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Shares V1 Shares Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Shares
+  /v1/shares/{share_id}/checksum:
+    get:
+      operationId: file_checksum_v1_shares__share_id__checksum_get
+      parameters:
+      - in: path
+        name: share_id
+        required: true
+        schema:
+          title: Share Id
+          type: string
+      - in: query
+        name: path
+        required: true
+        schema:
+          title: Path
+          type: string
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response File Checksum V1 Shares  Share Id  Checksum Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: File Checksum
+  /v1/shares/{share_id}/entries:
+    delete:
+      operationId: delete_v1_shares__share_id__entries_delete
+      parameters:
+      - in: path
+        name: share_id
+        required: true
+        schema:
+          title: Share Id
+          type: string
+      - in: query
+        name: path
+        required: true
+        schema:
+          title: Path
+          type: string
+      - in: query
+        name: recursive
+        required: false
+        schema:
+          default: false
+          title: Recursive
+          type: boolean
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Delete V1 Shares  Share Id  Entries Delete
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Delete
+  /v1/shares/{share_id}/finalize:
+    post:
+      operationId: finalize_v1_shares__share_id__finalize_post
+      parameters:
+      - in: path
+        name: share_id
+        required: true
+        schema:
+          title: Share Id
+          type: string
+      - in: query
+        name: name
+        required: true
+        schema:
+          title: Name
+          type: string
+      - in: query
+        name: path
+        required: false
+        schema:
+          default: ''
+          title: Path
+          type: string
+      - in: query
+        name: sha256
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sha256
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Finalize V1 Shares  Share Id  Finalize Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Finalize
+  /v1/shares/{share_id}/folders:
+    post:
+      operationId: make_folder_v1_shares__share_id__folders_post
+      parameters:
+      - in: path
+        name: share_id
+        required: true
+        schema:
+          title: Share Id
+          type: string
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFolderRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Make Folder V1 Shares  Share Id  Folders Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Make Folder
+  /v1/shares/{share_id}/list:
+    get:
+      operationId: browse_v1_shares__share_id__list_get
+      parameters:
+      - in: path
+        name: share_id
+        required: true
+        schema:
+          title: Share Id
+          type: string
+      - in: query
+        name: path
+        required: false
+        schema:
+          default: ''
+          title: Path
+          type: string
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Browse V1 Shares  Share Id  List Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Browse
+  /v1/shares/{share_id}/partial:
+    get:
+      description: How many bytes of an interrupted upload survived, so it can resume.
+      operationId: partial_status_v1_shares__share_id__partial_get
+      parameters:
+      - in: path
+        name: share_id
+        required: true
+        schema:
+          title: Share Id
+          type: string
+      - in: query
+        name: name
+        required: true
+        schema:
+          title: Name
+          type: string
+      - in: query
+        name: path
+        required: false
+        schema:
+          default: ''
+          title: Path
+          type: string
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Partial Status V1 Shares  Share Id  Partial Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Partial Status
+  /v1/shares/{share_id}/properties:
+    get:
+      operationId: entry_properties_v1_shares__share_id__properties_get
+      parameters:
+      - in: path
+        name: share_id
+        required: true
+        schema:
+          title: Share Id
+          type: string
+      - in: query
+        name: path
+        required: false
+        schema:
+          default: ''
+          title: Path
+          type: string
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Entry Properties V1 Shares  Share Id  Properties Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Entry Properties
+  /v1/shares/{share_id}/rename:
+    post:
+      operationId: rename_v1_shares__share_id__rename_post
+      parameters:
+      - in: path
+        name: share_id
+        required: true
+        schema:
+          title: Share Id
+          type: string
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenameRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Rename V1 Shares  Share Id  Rename Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Rename
+  /v1/uploads/{share_id}:
+    post:
+      operationId: upload_v1_uploads__share_id__post
+      parameters:
+      - in: path
+        name: share_id
+        required: true
+        schema:
+          title: Share Id
+          type: string
+      - in: query
+        name: path
+        required: false
+        schema:
+          default: ''
+          title: Path
+          type: string
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_upload_v1_uploads__share_id__post'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Upload V1 Uploads  Share Id  Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Upload
+servers:
+- url: https://{host}:{port}
+  variables:
+    host:
+      default: 192.168.1.20
+      description: LAN address from mDNS or an invite
+    port:
+      default: '8765'
+      description: TCP port from mDNS or an invite

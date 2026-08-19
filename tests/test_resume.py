@@ -96,19 +96,22 @@ def wait_for(transfer, statuses: set[TransferStatus], timeout: float = 20.0) -> 
     [
         (None, None),
         ("", None),
-        ("bytes=0-", 0),
-        ("bytes=1024-", 1024),
-        ("bytes=1024-2048", 1024),
-        ("BYTES=99-", 99),
+        ("bytes=0-", (0, None)),
+        ("bytes=1024-", (1024, None)),
+        ("bytes=1024-2048", (1024, 2048)),
+        ("BYTES=99-", (99, None)),
+        # Forms LanLink does not serve. The caller sends the whole file instead,
+        # which is always a valid answer to a range request.
         ("bytes=-500", None),
         ("bytes=0-10,20-30", None),
         ("items=5-", None),
         ("bytes=abc-", None),
         ("bytes=-1-", None),
+        ("bytes=9-4", None),
     ],
 )
 def test_parse_range(header, expected) -> None:
-    assert parse_range(header, 100_000) == expected
+    assert parse_range(header) == expected
 
 
 # ----------------------------------------------------------------- range download

@@ -125,8 +125,22 @@ python -m lanlink.desktop --data-dir C:\LanLink\Second
 It gets its own device identity, certificate and shares, and picks the next free
 port. `python -m lanlink.server --data-dir ...` does the same headless.
 
-Phase status: **0 through 4 complete.** See `docs/current_state.md` for the audit this
-work is based on. Next: Phase 5 — the native Kotlin Android client.
+## Protocol
+
+The wire protocol between devices is frozen at **v1** and documented in `docs/protocol/`:
+
+| File | What it is |
+|---|---|
+| `v1.md` | The specification. Discovery, TLS pinning, pairing, authentication, every endpoint, error codes, path rules, and what a client must do. |
+| `openapi.yaml` | Generated from the running app by `tools/export_openapi.py`. Never edited by hand. |
+| `schema.json` | JSON Schema for every response body. |
+
+`tests/test_protocol_contract.py` fails if the implementation drifts from those documents, or the
+documents from the implementation. Read `v1.md` before writing any new client.
+
+Phase status: **0 through 4 complete**, plus the Explorer browser with native drag-and-drop, plus
+the frozen v1 protocol. Next: Phase 5 — the native Kotlin Android client, written against
+`docs/protocol/v1.md`.
 
 ## Project layout
 

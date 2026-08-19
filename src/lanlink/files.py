@@ -294,3 +294,18 @@ def copy_or_move(
     else:
         raise FileAccessError("Unsupported file operation.")
     return destination
+
+
+def share_relative(state: HubState, share_id: str, item: Path) -> str:
+    """A path this API may return: relative to the share root, POSIX separators.
+
+    Absolute paths never leave the device. They would tell a paired peer where
+    the owner's folders actually live, which is not theirs to know.
+    """
+    share = state.get_share(share_id)
+    if not share:
+        return item.name
+    try:
+        return item.resolve().relative_to(Path(share.path).resolve()).as_posix()
+    except ValueError:
+        return item.name

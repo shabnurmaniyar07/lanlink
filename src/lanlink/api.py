@@ -22,6 +22,7 @@ from .files import (
     properties,
     rename_entry,
     resumable_state,
+    share_relative,
 )
 from .models import CopyMoveRequest, CreateFolderRequest, PairRequest, RenameRequest
 from .state import PERM_DELETE, PERM_READ, PERM_WRITE, HubState, PairedDevice
@@ -30,27 +31,45 @@ UPLOAD_CHUNK = 1024 * 1024
 DOWNLOAD_CHUNK = 512 * 1024
 
 
-def parse_range(header: str | None, total: int) -> int | None:
-    """Return the start offset of a simple ``bytes=N-`` request, else None."""
+def parse_range(header: str | None) -> tuple[int, int | None] | None:
+    """A single ``bytes=N-`` or ``bytes=N-M`` request, as inclusive offsets.
+
+    The end is None for an open-ended request. None overall means "not a form
+    LanLink serves" — a suffix range, a multi-range, another unit, or nonsense.
+    The caller then sends the whole file, which is always a correct answer to a
+    range request.
+    """
     if not header or not header.strip().lower().startswith("bytes="):
         return None
     spec = header.split("=", 1)[1].strip()
     if "," in spec:
-        return None  # multi-range is not something LanLink ever asks for
-    start_text = spec.split("-", 1)[0].strip()
+        return None  # multi-range would mean a multipart body; not worth the surface
+    start_text, _, end_text = spec.partition("-")
+    start_text, end_text = start_text.strip(), end_text.strip()
     if not start_text:
         return None  # suffix ranges ("-500") are not used either
     try:
         start = int(start_text)
+        end = int(end_text) if end_text else None
     except ValueError:
         return None
-    return start if start >= 0 else None
+    if start < 0 or (end is not None and end < start):
+        return None
+    return start, end
 
 
-def iter_file_from(path: Any, start: int) -> Iterator[bytes]:
+def iter_file_from(path: Any, start: int, end: int | None = None) -> Iterator[bytes]:
+    """Yield ``path`` from ``start`` to ``end`` inclusive, or to EOF when end is None."""
+    remaining = None if end is None else end - start + 1
     with open(path, "rb") as handle:
         handle.seek(start)
-        while block := handle.read(DOWNLOAD_CHUNK):
+        while remaining is None or remaining > 0:
+            size = DOWNLOAD_CHUNK if remaining is None else min(DOWNLOAD_CHUNK, remaining)
+            block = handle.read(size)
+            if not block:
+                return
+            if remaining is not None:
+                remaining -= len(block)
             yield block
 
 # HTTP status per pairing outcome. Distinct codes let a native client explain itself.
@@ -154,25 +173,45 @@ def create_app(state: HubState) -> FastAPI:
             raise file_error(error) from error
 
         total = item.stat().st_size
-        start = parse_range(range_header, total)
-        if start is None:
+        if range_header is None:
             return FileResponse(item, filename=item.name)
+
+        # A Range header is handled here and nowhere else. Delegating the odd
+        # forms to the framework would make the reply depend on which version of
+        # it is installed, and could return a multipart body a client is not
+        # expecting. Everything LanLink does not serve becomes the whole file.
+        disposition = f'attachment; filename="{item.name}"'
+        requested = parse_range(range_header)
+        if requested is None:
+            return StreamingResponse(
+                iter_file_from(item, 0),
+                status_code=200,
+                media_type="application/octet-stream",
+                headers={
+                    "Content-Length": str(total),
+                    "Accept-Ranges": "bytes",
+                    "Content-Disposition": disposition,
+                },
+            )
+
+        start, requested_end = requested
         if start >= total:
             raise HTTPException(
                 status_code=416,
                 detail="The requested range is past the end of the file.",
                 headers={"Content-Range": f"bytes */{total}"},
             )
+        end = total - 1 if requested_end is None else min(requested_end, total - 1)
         # Resume: stream from the offset the client already has.
         return StreamingResponse(
-            iter_file_from(item, start),
+            iter_file_from(item, start, end),
             status_code=206,
             media_type="application/octet-stream",
             headers={
-                "Content-Range": f"bytes {start}-{total - 1}/{total}",
-                "Content-Length": str(total - start),
+                "Content-Range": f"bytes {start}-{end}/{total}",
+                "Content-Length": str(end - start + 1),
                 "Accept-Ranges": "bytes",
-                "Content-Disposition": f'attachment; filename="{item.name}"',
+                "Content-Disposition": disposition,
             },
         )
 
@@ -391,7 +430,9 @@ def create_app(state: HubState) -> FastAPI:
             result = copy_or_move(state, **request.model_dump())
         except FileAccessError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-        return {"result": "ok", "path": str(result)}
+        # Share-relative, like every other path this API returns. The absolute
+        # location would tell a remote device where our folders live on disk.
+        return {"result": "ok", "path": share_relative(state, request.destination_share_id, result)}
 
     @app.delete("/v1/pairings/{client_id}")
     def revoke_pairing(client_id: str, caller: PairedDevice = Depends(require_pairing)) -> dict:
