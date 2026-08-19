@@ -1121,20 +1121,52 @@ class MainWindow(QMainWindow):
         self.refresh_devices()
 
     def forget_selected_device(self) -> None:
+        """Erase a device from this installation, whether or not it is online."""
         device = self._selected_device()
-        if device is None or not device.paired_out:
-            self._warn("Nothing to forget", "Select a device you have paired with.")
+        if device is None:
+            self._warn("Nothing to forget", "Select a device in the list first.")
             return
+        if not (device.paired_out or device.paired_in):
+            self._warn(
+                "Nothing to forget",
+                f"{device.name} was only discovered nearby; there is nothing saved to remove.",
+            )
+            return
+
+        loses_access = (
+            ", and it can no longer reach this device's shared folders" if device.paired_in else ""
+        )
+        detail = (
+            f"Remove everything LanLink has saved about {device.name}?\n\n"
+            f"Its token and pinned certificate are deleted here{loses_access}. "
+            "Pair again to reconnect."
+        )
         if (
-            QMessageBox.question(self, "Forget device", f"Remove the pairing with {device.name}?")
+            QMessageBox.question(self, "Forget device", detail)
             != QMessageBox.StandardButton.Yes
         ):
             return
-        self.state.remove_remote_device(device.id)
+
+        self.state.forget_device(device.id)
         client = self._clients.pop(device.id, None)
         if client:
             client.close()
+        # Drop the cached health row too, or a stale badge outlives the pairing.
+        self.health.statuses.pop(device.id, None)
+        self.health.errors.pop(device.id, None)
+        self._probing.discard(device.id)
+        if self.current_device is not None and self.current_device.id == device.id:
+            # The browser was showing the device we just erased. Leave it, and
+            # set the page directly: the sidebar row is already Devices, so
+            # setCurrentRow emits nothing and the browser would stay on screen.
+            self.current_device = None
+            self.current_share = None
+            self.current_path = ""
+            self.entry_model.set_entries([])
+            self.sidebar.setCurrentRow(PAGE_DEVICES)
+            self.pages.setCurrentIndex(PAGE_DEVICES)
         self.refresh_devices()
+        self.status_line.showMessage(f"Forgot {device.name}", 6000)
 
     def open_selected_device(self) -> None:
         device = self._selected_device()

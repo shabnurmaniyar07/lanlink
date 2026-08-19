@@ -746,3 +746,74 @@ def test_huge_images_are_left_with_their_type_glyph(window) -> None:
     )
     assert queued == []
     window.set_view_mode(0)
+
+
+# ------------------------------------------------------------ forget a device
+
+
+def _select_device(window, device) -> None:
+    window.device_model.set_devices([device])
+    window.device_view.setCurrentIndex(window.device_model.index(0, 0))
+
+
+def test_forget_removes_an_offline_paired_device_from_the_list(window, monkeypatch) -> None:
+    monkeypatch.setattr(
+        mw.QMessageBox, "question", lambda *a, **k: mw.QMessageBox.StandardButton.Yes
+    )
+    window.state.upsert_remote_device(
+        "gone-away-01", "Old Laptop", "https://10.0.0.9:8765", "tok", certificate="pem", fingerprint="ff"
+    )
+    device = mw.UnifiedDevice(id="gone-away-01", name="Old Laptop", paired_out=True)
+    window.health.statuses["gone-away-01"] = mw.DeviceStatus.OFFLINE
+    _select_device(window, device)
+
+    window.forget_selected_device()
+
+    assert window.state.knows_device("gone-away-01") is False
+    assert window.device_model.row_of("gone-away-01") == -1
+    assert "gone-away-01" not in window.health.statuses
+
+
+def test_forget_works_for_a_device_that_only_paired_inwards(window, monkeypatch) -> None:
+    """The old guard refused these outright, so they could never be removed."""
+    monkeypatch.setattr(
+        mw.QMessageBox, "question", lambda *a, **k: mw.QMessageBox.StandardButton.Yes
+    )
+    window.state.approval_callback = None  # no owner sitting in front of a headless test
+    code, _ = window.state.start_pairing()
+    result = window.state.pair("inbound-only-1", "Their PC", code, source="10.0.0.5")
+    assert result.ok
+    _select_device(window, mw.UnifiedDevice(id="inbound-only-1", name="Their PC", paired_in=True))
+
+    window.forget_selected_device()
+
+    assert window.state.paired_devices == {}
+    assert window.state.identify(result.token) is None
+
+
+def test_forget_leaves_a_merely_discovered_device_alone(window, monkeypatch) -> None:
+    warned = []
+    monkeypatch.setattr(window, "_warn", lambda title, body: warned.append(title))
+    _select_device(window, mw.UnifiedDevice(id="stranger-1", name="Stranger", discovered=True))
+
+    window.forget_selected_device()
+
+    assert warned == ["Nothing to forget"]
+
+
+def test_forget_closes_the_browser_when_it_was_showing_that_device(window, monkeypatch) -> None:
+    monkeypatch.setattr(
+        mw.QMessageBox, "question", lambda *a, **k: mw.QMessageBox.StandardButton.Yes
+    )
+    window.state.upsert_remote_device("open-now-01", "Open PC", "https://10.0.0.4:8765", "tok")
+    device = mw.UnifiedDevice(id="open-now-01", name="Open PC", paired_out=True)
+    window.current_device = device
+    window.current_share = {"share_id": "s1", "name": "Docs", "permissions": "rw"}
+    window.pages.setCurrentIndex(mw.PAGE_BROWSER)
+    _select_device(window, device)
+
+    window.forget_selected_device()
+
+    assert window.current_device is None
+    assert window.current_share is None
+    assert window.pages.currentIndex() != mw.PAGE_BROWSER

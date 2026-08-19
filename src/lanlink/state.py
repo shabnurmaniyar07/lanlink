@@ -410,6 +410,30 @@ class HubState:
             self._save()
             return True
 
+    def forget_device(self, device_id: str) -> bool:
+        """Erase everything this installation knows about one other device.
+
+        Both directions go at once. Dropping only the outbound pairing would
+        leave the other device still holding a working token for our shares, and
+        the entry would come back on the next start from the inbound record —
+        which is not what "forget" means to the person who pressed it.
+
+        The local identity is never a candidate, and no other device is touched.
+        """
+        with self._lock:
+            if not device_id or device_id == self.device_id:
+                return False
+            removed = self.remote_devices.pop(device_id, None) is not None
+            removed = (self.paired_devices.pop(device_id, None) is not None) or removed
+            if removed:
+                self._save()
+            return removed
+
+    def knows_device(self, device_id: str) -> bool:
+        """True while either direction of a pairing survives."""
+        with self._lock:
+            return device_id in self.remote_devices or device_id in self.paired_devices
+
     def remote_devices_snapshot(self) -> list[RemoteDevice]:
         with self._lock:
             return list(self.remote_devices.values())
