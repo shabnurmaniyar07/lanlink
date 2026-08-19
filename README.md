@@ -149,6 +149,21 @@ It speaks only the documented protocol, so it works against any implementation, 
 Everything it creates goes in a folder called `lanlink-conformance` and is deleted afterwards, and
 it unpairs itself when it finishes.
 
+## Building an installer
+
+```powershell
+packaging\build.bat
+```
+
+Produces `dist\LanLink\LanLink.exe` and, with Inno Setup 6 installed,
+`packaging\output\LanLinkSetup-<version>.exe` — Start Menu and Desktop shortcuts, a
+private-networks-only firewall rule, and in-place upgrades. Uninstalling leaves the device
+identity and pairings alone. See `packaging/README.md`.
+
+**Settings → Updates** can watch a GitHub repository's releases and say when a newer version
+exists. LanLink never downloads or installs anything itself; it shows what changed and gives you
+the link.
+
 ## Android
 
 `android/core/` holds the Kotlin protocol client — models, path rules, resume arithmetic,

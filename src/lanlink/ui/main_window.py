@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import __version__
 from ..client import LanLinkClient
 from ..crypto import fetch_peer_certificate, fingerprint_of_pem, secrets_are_protected, short_fingerprint
 from ..discovery import DiscoveryBrowser, local_ipv4_address_strings
@@ -56,13 +57,23 @@ from ..transfers import (
     upload_folder_runner,
     upload_runner,
 )
+from ..updates import UpdateCheck, check_for_update
 from .browser_model import EntryFilterProxy, RemoteEntryModel, format_size, format_time
 from .devices import DeviceListModel, DeviceStatus, HealthTracker, UnifiedDevice, merge_devices
 from .dragdrop import entry_to_remote, plan_drag
 from .jobs import JobRunner
 from .pairing import PairingApproval
 from .qrcode import QrLabel
-from .theme import apply_theme, save_theme, saved_theme, theme_choices
+from .theme import (
+    apply_theme,
+    checks_updates_at_startup,
+    save_check_at_startup,
+    save_theme,
+    save_update_repository,
+    saved_theme,
+    saved_update_repository,
+    theme_choices,
+)
 from .thumbnails import ThumbnailCache
 from .transfer_model import TransferTableModel, summarise
 from .widgets import Breadcrumb, DropListView, DropTreeView, ProgressDelegate, open_local_file
@@ -363,6 +374,12 @@ class MainWindow(QMainWindow):
         self.bridge.changed.connect(self.refresh_transfers)
         self.refresh_all()
         self._start_timers()
+
+        self._update_link = ""
+        if checks_updates_at_startup() and saved_update_repository():
+            # Quietly: a version check must never be the first thing a person
+            # is asked about when they open the application.
+            QTimer.singleShot(2500, lambda: self.check_for_updates(quiet=True))
 
     # ------------------------------------------------------------------ layout
 
@@ -789,6 +806,40 @@ class MainWindow(QMainWindow):
         cache_note.setWordWrap(True)
         cache_note.setObjectName("muted")
         layout.addWidget(cache_note)
+
+        layout.addWidget(self._heading("Updates"))
+        update_form = QFormLayout()
+        self.update_repo = QLineEdit(saved_update_repository())
+        self.update_repo.setPlaceholderText("owner/name, for example lanlink/lanlink")
+        self.update_repo.setToolTip("The GitHub repository whose releases LanLink should look at.")
+        update_form.addRow("Release repository:", self.update_repo)
+        self.update_startup = QCheckBox("Check once when LanLink starts")
+        self.update_startup.setChecked(checks_updates_at_startup())
+        update_form.addRow("Automatically:", self.update_startup)
+        self.update_status = QLabel(f"Running version {__version__}.")
+        self.update_status.setWordWrap(True)
+        self.update_status.setObjectName("muted")
+        update_form.addRow("Status:", self.update_status)
+        layout.addLayout(update_form)
+
+        update_row = QHBoxLayout()
+        self.update_button = QPushButton("Check for updates")
+        self.update_button.clicked.connect(self.check_for_updates)
+        update_row.addWidget(self.update_button)
+        self.update_copy = QPushButton("Copy download link")
+        self.update_copy.setEnabled(False)
+        self.update_copy.clicked.connect(self.copy_update_link)
+        update_row.addWidget(self.update_copy)
+        update_row.addStretch()
+        layout.addLayout(update_row)
+
+        update_note = QLabel(
+            "LanLink never installs anything by itself. It only tells you a newer version exists "
+            "and gives you the link; downloading and running the installer stays your decision."
+        )
+        update_note.setWordWrap(True)
+        update_note.setObjectName("muted")
+        layout.addWidget(update_note)
 
         note = QLabel(
             "Each device has its own certificate. Peers pin it when they pair, so an "
@@ -2140,6 +2191,69 @@ class MainWindow(QMainWindow):
 
     # --------------------------------------------------------------- settings
 
+    # ---------------------------------------------------------------- updates
+
+    def check_for_updates(self, quiet: bool = False) -> None:
+        """Ask GitHub, off the GUI thread. Never downloads, never installs."""
+        repository = save_update_repository(self.update_repo.text())
+        self._update_link = ""
+        self.update_copy.setEnabled(False)
+        self.update_button.setEnabled(False)
+        self.update_status.setText("Checking…")
+
+        def work():
+            return check_for_update(repository, __version__)
+
+        def ready(result: object) -> None:
+            self.update_button.setEnabled(True)
+            check = result if isinstance(result, UpdateCheck) else None
+            if check is None:
+                self.update_status.setText("The update check returned nothing.")
+                return
+            self.update_status.setText(check.message)
+            self._update_link = check.link
+            self.update_copy.setEnabled(bool(check.link))
+            if check.has_update and not quiet:
+                self._show_release(check)
+            elif check.has_update:
+                self.status_line.showMessage(check.message, 12000)
+
+        def failed(message: str) -> None:
+            self.update_button.setEnabled(True)
+            self.update_status.setText(f"The update check failed: {message}")
+
+        self.runner.run(work, ready, failed)
+
+    def _show_release(self, check: UpdateCheck) -> None:
+        release = check.release
+        if release is None:
+            return
+        notes = release.notes.strip()
+        if len(notes) > 1200:
+            notes = notes[:1200].rstrip() + "\n…"
+        body = f"{check.message}\n\n{notes}" if notes else check.message
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle(f"LanLink {release.version} is available")
+        dialog.setText(body)
+        dialog.setInformativeText(
+            f"Download it from:\n{check.link}\n\n"
+            "LanLink will not download or install it for you."
+        )
+        copy_button = dialog.addButton("Copy link", QMessageBox.ButtonRole.ActionRole)
+        dialog.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        dialog.exec()
+        if dialog.clickedButton() is copy_button:
+            self.copy_update_link()
+
+    def copy_update_link(self) -> None:
+        link = getattr(self, "_update_link", "")
+        if not link:
+            return
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(link)
+        self.status_line.showMessage("Download link copied", 6000)
+
     def change_theme(self, index: int) -> None:
         """Persist and repaint at once; the user should not have to restart."""
         mode = self.theme_combo.itemData(index)
@@ -2153,6 +2267,8 @@ class MainWindow(QMainWindow):
         tls_changed = self.state.use_tls != self.setting_tls.isChecked()
         self.state.use_tls = self.setting_tls.isChecked()
         self.state._save()
+        save_update_repository(self.update_repo.text())
+        save_check_at_startup(self.update_startup.isChecked())
         if tls_changed:
             QMessageBox.information(
                 self,

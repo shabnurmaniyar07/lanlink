@@ -1020,3 +1020,69 @@ def test_a_file_already_being_fetched_is_not_queued_twice(window) -> None:
     window.prestage_selection()
 
     assert queued == []
+
+
+# ---------------------------------------------------------------- update check
+
+
+def test_settings_offers_an_update_check(window) -> None:
+    assert window.update_repo.text() == "", "no repository is configured by default"
+    assert window.update_startup.isChecked() is False
+    assert window.update_copy.isEnabled() is False, "there is no link to copy yet"
+    assert mw.__version__ in window.update_status.text()
+
+
+def test_an_unconfigured_repository_asks_to_be_set_rather_than_failing(window) -> None:
+    window.update_repo.setText("")
+    window.check_for_updates(quiet=True)
+    window.runner.wait(4000)
+    for _ in range(200):
+        QApplication.processEvents()
+        if "Settings" in window.update_status.text():
+            break
+    assert "Settings" in window.update_status.text()
+    assert window.update_copy.isEnabled() is False
+
+
+def test_a_newer_release_is_reported_and_its_link_can_be_copied(window, monkeypatch) -> None:
+    from lanlink.updates import Release, UpdateCheck, UpdateStatus, Version
+
+    check = UpdateCheck(
+        UpdateStatus.UPDATE_AVAILABLE,
+        "LanLink 9.9.9 is available. You are running 0.1.0.",
+        Release(Version.parse("9.9.9"), "LanLink 9.9.9", "Notes", "https://x/page", "https://x/setup.exe"),
+        Version.parse("0.1.0"),
+    )
+    monkeypatch.setattr(mw, "check_for_update", lambda *a, **k: check)
+    window.update_repo.setText("owner/lanlink")
+
+    window.check_for_updates(quiet=True)
+    for _ in range(300):
+        QApplication.processEvents()
+        if window.update_copy.isEnabled():
+            break
+
+    assert "9.9.9" in window.update_status.text()
+    assert window.update_copy.isEnabled()
+    window.copy_update_link()
+    assert QApplication.clipboard().text() == "https://x/setup.exe"
+
+
+def test_the_repository_and_startup_choice_are_saved(window) -> None:
+    from lanlink.ui import theme as theme_module
+
+    window.update_repo.setText("owner/lanlink")
+    window.update_startup.setChecked(True)
+    window.save_settings()
+
+    assert theme_module.saved_update_repository() == "owner/lanlink"
+    assert theme_module.checks_updates_at_startup() is True
+
+
+def test_checking_for_updates_never_blocks_the_window(window, monkeypatch) -> None:
+    """It runs through the job runner like every other network call."""
+    import inspect
+
+    source = inspect.getsource(mw.MainWindow.check_for_updates)
+    assert "self.runner.run(" in source
+    assert "check_for_update(" in source

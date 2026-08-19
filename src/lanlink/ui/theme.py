@@ -19,6 +19,8 @@ from PySide6.QtGui import QPalette
 ORGANISATION = "LanLink"
 APPLICATION = "LanLink"
 SETTINGS_KEY = "appearance/theme"
+UPDATE_REPOSITORY_KEY = "updates/repository"
+UPDATE_AT_STARTUP_KEY = "updates/check_at_startup"
 
 SYSTEM = "system"
 LIGHT = "light"
@@ -266,6 +268,30 @@ def _scheme_name(app: Any) -> str:
         return ""
     value = scheme()
     return str(getattr(value, "name", value) or "").lower()
+
+
+def saved_update_repository() -> str:
+    return str(settings().value(UPDATE_REPOSITORY_KEY, "") or "").strip()
+
+
+def save_update_repository(repository: str) -> str:
+    cleaned = (repository or "").strip()
+    store = settings()
+    store.setValue(UPDATE_REPOSITORY_KEY, cleaned)
+    store.sync()
+    return cleaned
+
+
+def checks_updates_at_startup() -> bool:
+    value = settings().value(UPDATE_AT_STARTUP_KEY, False)
+    return str(value).strip().lower() in {"true", "1", "yes"}
+
+
+def save_check_at_startup(enabled: bool) -> bool:
+    store = settings()
+    store.setValue(UPDATE_AT_STARTUP_KEY, bool(enabled))
+    store.sync()
+    return bool(enabled)
 
 
 def detect_system_theme(app: Any | None = None) -> str:
