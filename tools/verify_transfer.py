@@ -139,8 +139,8 @@ def main() -> int:
             check("File exists on the other device", entry is not None)
             check(
                 "Size matches",
-                bool(entry) and entry["size"] == len(payload),
-                f"{entry['size']:,} vs {len(payload):,}" if entry else "",
+                entry is not None and entry["size"] == len(payload),
+                f"{entry['size']:,} vs {len(payload):,}" if entry is not None else "",
             )
             remote_digest = client.checksum(share_id, source.name)
             check("SHA-256 matches", remote_digest == digest, remote_digest[:16] + "…")

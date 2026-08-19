@@ -138,6 +138,17 @@ The wire protocol between devices is frozen at **v1** and documented in `docs/pr
 `tests/test_protocol_contract.py` fails if the implementation drifts from those documents, or the
 documents from the implementation. Read `v1.md` before writing any new client.
 
+To check a **running** node — over the real network, with a real pinned certificate — switch
+pairing on there and point the conformance runner at it:
+
+```powershell
+python tools\conformance.py --host 192.168.1.20 --port 8765 --code 48210937
+```
+
+It speaks only the documented protocol, so it works against any implementation, not just this one.
+Everything it creates goes in a folder called `lanlink-conformance` and is deleted afterwards, and
+it unpairs itself when it finishes.
+
 Phase status: **0 through 4 complete**, plus the Explorer browser with native drag-and-drop, plus
 the frozen v1 protocol. Next: Phase 5 — the native Kotlin Android client, written against
 `docs/protocol/v1.md`.

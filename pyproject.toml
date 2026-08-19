@@ -45,6 +45,10 @@ ignore = ["B008"]
 
 [tool.mypy]
 python_version = "3.11"
-files = ["src/lanlink"]
+files = ["src/lanlink", "tools"]
 ignore_missing_imports = true
 no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_missing_imports = true
