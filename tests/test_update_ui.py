@@ -320,10 +320,23 @@ def test_the_cache_survives_a_restart(store) -> None:
     assert reopened.value(theme_module.UPDATE_SKIPPED_KEY) == "0.5.0"
 
 
-def test_automatic_checking_is_off_until_asked_for(store) -> None:
+def test_automatic_checking_is_on_unless_it_is_turned_off(store) -> None:
+    """A fix nobody hears about is not a fix. Off has to be a decision."""
+    assert theme_module.checks_updates_at_startup() is True
+    theme_module.save_check_at_startup(False)
     assert theme_module.checks_updates_at_startup() is False
     theme_module.save_check_at_startup(True)
     assert theme_module.checks_updates_at_startup() is True
+
+
+def test_an_empty_repository_setting_means_the_one_lanlink_ships_from(store) -> None:
+    from lanlink.updates import DEFAULT_REPOSITORY
+
+    assert theme_module.saved_update_repository() == DEFAULT_REPOSITORY
+    theme_module.save_update_repository("someone/fork")
+    assert theme_module.saved_update_repository() == "someone/fork"
+    theme_module.save_update_repository("")
+    assert theme_module.saved_update_repository() == DEFAULT_REPOSITORY
 
 
 def test_a_recent_check_stops_the_next_launch_from_asking_again(store) -> None:

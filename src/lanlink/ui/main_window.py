@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QStackedWidget,
@@ -43,6 +45,7 @@ from ..client import LanLinkClient
 from ..crypto import fetch_peer_certificate, fingerprint_of_pem, secrets_are_protected, short_fingerprint
 from ..discovery import DiscoveryBrowser, local_ipv4_address_strings
 from ..invite import InvalidInvite, Invite, parse_invite
+from ..logs import log_folder
 from ..pairing_request import PAIRING_WAIT_SECONDS, PairingOutcome, PairingRequest
 from ..server import LocalService
 from ..staging import RemoteFile, RemoteFileStager
@@ -426,7 +429,7 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self._build_transfers())
         self.pages.addWidget(self._build_shares())
         self.pages.addWidget(self._build_history())
-        self.pages.addWidget(self._build_settings())
+        self.pages.addWidget(self._scrollable(self._build_settings()))
         self.pages.addWidget(self._build_browser())
         right_layout.addWidget(self.pages, 1)
         splitter.addWidget(right)
@@ -447,6 +450,21 @@ class MainWindow(QMainWindow):
         caption.setObjectName("muted")
         layout.addWidget(caption)
         return page, layout
+
+    def _scrollable(self, page: QWidget) -> QScrollArea:
+        """Let a long page keep its natural height.
+
+        A page taller than the window is squeezed by the layout: fields lose
+        rows, labels lose descenders, and Settings becomes unreadable on a
+        laptop screen. A scroll area gives the page the height it asks for and
+        moves the shortfall to a scrollbar, where it belongs.
+        """
+        area = QScrollArea()
+        area.setWidget(page)
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        return area
 
     def _heading(self, text: str) -> QLabel:
         """A section heading inside a page. Its colour comes from the theme."""
@@ -817,6 +835,7 @@ class MainWindow(QMainWindow):
             ("Open cache folder", self.open_cache_folder),
             ("Clear staged files", self.clear_staging_cache),
             ("Clear thumbnails", self.clear_thumbnail_cache),
+            ("Open log folder", self.open_log_folder),
         ]:
             button = QPushButton(label)
             button.clicked.connect(slot)
@@ -1017,6 +1036,12 @@ class MainWindow(QMainWindow):
     def open_cache_folder(self) -> None:
         self.stager.root.mkdir(parents=True, exist_ok=True)
         open_local_file(self.stager.root)
+
+    def open_log_folder(self) -> None:
+        """Where to look when LanLink misbehaves, without asking for a screenshot."""
+        folder = log_folder()
+        folder.mkdir(parents=True, exist_ok=True)
+        open_local_file(folder)
 
     def clear_staging_cache(self) -> None:
         removed = self.stager.clear()
@@ -2242,7 +2267,11 @@ class MainWindow(QMainWindow):
         but must not open a dialog. Somebody who opened LanLink to move a file
         does not want a modal about versions.
         """
-        repository = save_update_repository(self.update_repo.text())
+        save_update_repository(self.update_repo.text())
+        # Emptying the field means "the repository LanLink ships from", not
+        # "never check": saved_update_repository supplies the default.
+        repository = saved_update_repository()
+        self.update_repo.setText(repository)
         self._update_link = ""
         self._update_check = None
         self.update_copy.setEnabled(False)
