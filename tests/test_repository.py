@@ -136,3 +136,43 @@ def test_the_release_only_fires_on_a_version_tag() -> None:
 def test_the_release_asks_for_no_more_permission_than_it_needs() -> None:
     workflow = load(RELEASE)
     assert workflow["permissions"] == {"contents": "write"}
+
+
+# -------------------------------------------- the artifacts the updater needs
+
+
+def test_the_release_publishes_all_three_artifacts() -> None:
+    """LanLink refuses to install without SHA256SUMS.txt, so it must be there."""
+    workflow = load(RELEASE)
+    publish = next(step for step in steps(workflow, "windows") if "gh-release" in str(step.get("uses", "")))
+    files = publish["with"]["files"]
+    assert "LanLinkSetup-" in files and ".exe" in files
+    assert "-portable.zip" in files
+    assert "SHA256SUMS.txt" in files
+
+
+def test_the_release_computes_the_checksums_itself() -> None:
+    run = commands(load(RELEASE), "windows")
+    assert "Get-FileHash" in run
+    assert "SHA256" in run
+    assert "SHA256SUMS.txt" in run
+
+
+def test_the_release_checks_the_artifacts_before_publishing() -> None:
+    """A missing file should fail the build, not produce a release nobody can use."""
+    run = commands(load(RELEASE), "windows")
+    assert "test -f \"packaging/output/SHA256SUMS.txt\"" in run
+    assert "grep -q \"LanLinkSetup-$version.exe\" packaging/output/SHA256SUMS.txt" in run
+
+
+def test_the_artifacts_are_named_after_the_application_version() -> None:
+    run = commands(load(RELEASE), "windows")
+    assert "LanLinkSetup-${{ steps.version.outputs.value }}.exe" in run or "LanLinkSetup-$version.exe" in run
+    assert "steps.version.outputs.value" in run, "the version comes from the package, not the tag"
+
+
+def test_the_local_build_produces_the_same_three_artifacts() -> None:
+    build = (REPO / "packaging" / "build.bat").read_text(encoding="utf-8")
+    assert "Compress-Archive" in build, "no portable zip"
+    assert "SHA256SUMS.txt" in build
+    assert "Get-FileHash" in build
