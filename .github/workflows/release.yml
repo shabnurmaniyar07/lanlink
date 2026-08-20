@@ -105,6 +105,28 @@ jobs:
           Compress-Archive -Path dist\LanLink\* `
             -DestinationPath packaging\output\LanLink-${{ steps.version.outputs.value }}-portable.zip
 
+      # LanLink refuses to run an installer it cannot check against this file,
+      # so a release without it is a release nobody can auto-update to.
+      - name: Publish the checksums
+        shell: pwsh
+        run: |
+          Push-Location packaging\output
+          Get-ChildItem -File | Where-Object { $_.Name -ne "SHA256SUMS.txt" } | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+          Pop-Location
+
+      - name: The artifacts are named after the application version
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.value }}"
+          test -f "packaging/output/LanLinkSetup-$version.exe"
+          test -f "packaging/output/LanLink-$version-portable.zip"
+          test -f "packaging/output/SHA256SUMS.txt"
+          grep -q "LanLinkSetup-$version.exe" packaging/output/SHA256SUMS.txt
+
       - uses: actions/upload-artifact@v4
         with:
           name: LanLink-${{ steps.version.outputs.value }}
@@ -121,3 +143,4 @@ jobs:
           files: |
             packaging/output/LanLinkSetup-${{ steps.version.outputs.value }}.exe
             packaging/output/LanLink-${{ steps.version.outputs.value }}-portable.zip
+            packaging/output/SHA256SUMS.txt

@@ -1086,3 +1086,128 @@ def test_checking_for_updates_never_blocks_the_window(window, monkeypatch) -> No
     source = inspect.getsource(mw.MainWindow.check_for_updates)
     assert "self.runner.run(" in source
     assert "check_for_update(" in source
+
+
+# ------------------------------------------------- the update system in place
+
+
+def _update_check(version: str = "0.2.0", *, checksums: bool = True):
+    from lanlink.updates import CHECKSUM_ASSET, Asset, Release, UpdateCheck, UpdateStatus, Version
+
+    assets = [Asset(f"LanLinkSetup-{version}.exe", "https://x/setup.exe", 1000)]
+    if checksums:
+        assets.append(Asset(CHECKSUM_ASSET, "https://x/SHA256SUMS.txt", 100))
+    return UpdateCheck(
+        UpdateStatus.UPDATE_AVAILABLE,
+        f"LanLink {version} is available. You are running {mw.__version__}.",
+        Release(Version.parse(version), f"LanLink {version}", "Notes", "https://x/page",
+                "https://x/setup.exe", assets=tuple(assets)),
+        Version.parse(mw.__version__),
+    )
+
+
+def test_settings_shows_the_current_and_latest_version(window) -> None:
+    assert window.update_current.text() == mw.__version__
+    assert window.update_latest.text() == "not checked yet"
+    assert window.update_now.isEnabled() is False, "nothing to install before a check"
+
+
+def test_being_up_to_date_says_so_in_those_words(window) -> None:
+    from lanlink.updates import Release, UpdateCheck, UpdateStatus, Version
+
+    check = UpdateCheck(
+        UpdateStatus.UP_TO_DATE,
+        f"LanLink {mw.__version__} is the newest version.",
+        Release(Version.parse(mw.__version__), "", "", "", ""),
+        Version.parse(mw.__version__),
+    )
+    window._apply_update_check(check)
+
+    assert window.update_status.text() == "You're up to date."
+    assert window.update_latest.text() == mw.__version__
+    assert window.update_now.isEnabled() is False
+
+
+def test_an_update_enables_update_now_and_remembers_the_check(window) -> None:
+    from lanlink.ui import theme as theme_module
+
+    window._apply_update_check(_update_check(), quiet=True)
+
+    assert window.update_now.isEnabled()
+    assert window.update_latest.text() == "0.2.0"
+    assert window.update_banner.isHidden() is False, "the quiet check puts a line up"
+    assert theme_module.saved_last_version() == "0.2.0"
+    assert theme_module.saved_last_check(), "a successful check is cached"
+
+
+def test_an_unverifiable_release_does_not_offer_to_install(window) -> None:
+    window._apply_update_check(_update_check(checksums=False), quiet=True)
+
+    assert window.update_now.isEnabled() is False
+    assert window.update_copy.isEnabled(), "the link is still there to copy"
+
+
+def test_a_failed_check_does_not_postpone_the_next_one(window) -> None:
+    from lanlink.ui import theme as theme_module
+    from lanlink.updates import UpdateCheck, UpdateStatus, Version
+
+    window._apply_update_check(
+        UpdateCheck(UpdateStatus.FAILED, "Could not reach GitHub.", None, Version.parse("0.1.0"))
+    )
+
+    assert theme_module.saved_last_check() == "", "a failure must not count as a daily check"
+    assert window.update_now.isEnabled() is False
+
+
+def test_a_skipped_version_is_not_announced_again(window) -> None:
+    from lanlink.ui import theme as theme_module
+
+    theme_module.save_skipped_version("0.2.0")
+    window._apply_update_check(_update_check("0.2.0"), quiet=True)
+    assert window.update_banner.isHidden(), "the user asked not to hear about this one"
+
+    window._apply_update_check(_update_check("0.3.0"), quiet=True)
+    assert window.update_banner.isHidden() is False, "a newer version is still announced"
+
+
+def test_skipping_records_the_version_and_hides_the_banner(window) -> None:
+    from lanlink.ui import theme as theme_module
+
+    window._apply_update_check(_update_check(), quiet=True)
+    window._skip_version("0.2.0")
+
+    assert theme_module.saved_skipped_version() == "0.2.0"
+    assert window.update_banner.isHidden()
+    assert "Skipping" in window.update_status.text()
+
+
+def test_the_startup_check_respects_the_daily_interval(window) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from lanlink.ui import theme as theme_module
+
+    theme_module.save_check_at_startup(False)
+    assert window._startup_check_is_due() is False, "off means off"
+
+    theme_module.save_check_at_startup(True)
+    theme_module.save_update_repository("")
+    assert window._startup_check_is_due() is False, "no repository, nothing to ask"
+
+    theme_module.save_update_repository("owner/lanlink")
+    assert window._startup_check_is_due() is True, "never checked"
+
+    theme_module.save_last_check(datetime.now(UTC).isoformat(), "0.1.0")
+    assert window._startup_check_is_due() is False, "checked an hour ago"
+
+    theme_module.save_last_check((datetime.now(UTC) - timedelta(days=2)).isoformat(), "0.1.0")
+    assert window._startup_check_is_due() is True
+
+
+def test_update_now_without_a_check_warns_rather_than_downloading(window, monkeypatch) -> None:
+    warned = []
+    monkeypatch.setattr(window, "_warn", lambda title, body: warned.append(title))
+    window._update_check = None
+
+    window.open_update_dialog()
+
+    assert warned == ["Nothing to install"]

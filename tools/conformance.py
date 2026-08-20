@@ -135,6 +135,11 @@ def session(base_url: str, verify: ssl.SSLContext | bool) -> Iterator[httpx.Clie
         client.close()
 
 
+# httpx types a query value as one of these. Naming it keeps the two request
+# helpers below honest about what they may forward into params=.
+Primitive = str | int | float | bool | None
+
+
 # ----------------------------------------------------------------- the checks
 
 
@@ -148,14 +153,14 @@ class Conformance:
 
     # helpers ---------------------------------------------------------------
 
-    def get(self, url: str, **params: object) -> httpx.Response:
+    def get(self, url: str, **params: Primitive) -> httpx.Response:
         return self.http.get(url, params=params, headers=self.auth)
 
     def entries(self, path: str = "") -> list[dict]:
         response = expect_status(self.get(f"/v1/shares/{self.share}/list", path=path), 200)
         return response.json()["entries"]
 
-    def put_file(self, name: str, body: bytes, **params) -> httpx.Response:
+    def put_file(self, name: str, body: bytes, **params: Primitive) -> httpx.Response:
         return self.http.put(
             f"/v1/files/{self.share}",
             params={"path": self.folder, "name": name, **params},

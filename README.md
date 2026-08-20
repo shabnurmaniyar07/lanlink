@@ -162,9 +162,11 @@ Produces `dist\LanLink\LanLink.exe` and, with Inno Setup 6 installed,
 private-networks-only firewall rule, and in-place upgrades. Uninstalling leaves the device
 identity and pairings alone. See `packaging/README.md`.
 
-**Settings → Updates** can watch a GitHub repository's releases and say when a newer version
-exists. LanLink never downloads or installs anything itself; it shows what changed and gives you
-the link.
+**Settings → Updates** watches a GitHub repository's **releases** — never a branch, never the
+source tree. It checks at most once a day, shows what changed, and downloads the installer only
+when asked. The download is verified against the `SHA256SUMS.txt` published in the same release
+before anything is run; on a mismatch the file is deleted and nothing is installed. Updating
+replaces the program and leaves the device identity, its certificate and every pairing alone.
 
 ## Android
 

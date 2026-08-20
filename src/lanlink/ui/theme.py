@@ -11,16 +11,18 @@ before the window is shown.
 
 from __future__ import annotations
 
-from typing import Any
-
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QPalette
+from PySide6.QtWidgets import QApplication
 
 ORGANISATION = "LanLink"
 APPLICATION = "LanLink"
 SETTINGS_KEY = "appearance/theme"
 UPDATE_REPOSITORY_KEY = "updates/repository"
 UPDATE_AT_STARTUP_KEY = "updates/check_at_startup"
+UPDATE_LAST_CHECK_KEY = "updates/last_check"
+UPDATE_LAST_VERSION_KEY = "updates/last_version"
+UPDATE_SKIPPED_KEY = "updates/skipped_version"
 
 SYSTEM = "system"
 LIGHT = "light"
@@ -254,7 +256,18 @@ def save_theme(mode: object) -> str:
     return chosen
 
 
-def _scheme_name(app: Any) -> str:
+def _application(app: object | None = None) -> QApplication | None:
+    """The running QApplication, or None.
+
+    QApplication.instance() is declared as returning the base QCoreApplication,
+    which has no palette and no stylesheet. Narrowing to the real type once here
+    keeps every caller honest without a cast or a suppression.
+    """
+    candidate = app if app is not None else QApplication.instance()
+    return candidate if isinstance(candidate, QApplication) else None
+
+
+def _scheme_name(app: QApplication) -> str:
     """What Qt says the desktop's colour scheme is, or "" when it does not know.
 
     Qt 6.5 answers this on Windows and macOS. Older versions and some Linux
@@ -294,31 +307,58 @@ def save_check_at_startup(enabled: bool) -> bool:
     return bool(enabled)
 
 
-def detect_system_theme(app: Any | None = None) -> str:
+def saved_last_check() -> str:
+    """When the last successful check finished, so automatic checking can be daily."""
+    return str(settings().value(UPDATE_LAST_CHECK_KEY, "") or "")
+
+
+def saved_last_version() -> str:
+    """The newest version the last successful check saw."""
+    return str(settings().value(UPDATE_LAST_VERSION_KEY, "") or "")
+
+
+def save_last_check(timestamp: str, latest_version: str) -> None:
+    store = settings()
+    store.setValue(UPDATE_LAST_CHECK_KEY, timestamp)
+    store.setValue(UPDATE_LAST_VERSION_KEY, latest_version)
+    store.sync()
+
+
+def saved_skipped_version() -> str:
+    return str(settings().value(UPDATE_SKIPPED_KEY, "") or "")
+
+
+def save_skipped_version(version: str) -> str:
+    cleaned = (version or "").strip()
+    store = settings()
+    store.setValue(UPDATE_SKIPPED_KEY, cleaned)
+    store.sync()
+    return cleaned
+
+
+def detect_system_theme(app: object | None = None) -> str:
     """Light or dark, from whatever the platform is telling Qt.
 
     No extra package and nothing platform-specific to import: the colour-scheme
     hint when it exists, otherwise how bright the window colour is.
     """
-    from PySide6.QtWidgets import QApplication
-
-    app = app or QApplication.instance()
-    if app is None:
+    application = _application(app)
+    if application is None:
         return LIGHT
 
-    name = _scheme_name(app).lower()
+    name = _scheme_name(application).lower()
     if "dark" in name:
         return DARK
     if "light" in name:
         return LIGHT
 
-    colour = app.palette().color(QPalette.ColorRole.Window)
+    colour = application.palette().color(QPalette.ColorRole.Window)
     # Rec. 601 luma: a dim window colour means the desktop is in dark mode.
     luma = (0.299 * colour.red() + 0.587 * colour.green() + 0.114 * colour.blue()) / 255
     return DARK if luma < 0.5 else LIGHT
 
 
-def resolve(mode: object, app: Any | None = None) -> str:
+def resolve(mode: object, app: object | None = None) -> str:
     """The concrete theme to paint: system becomes light or dark."""
     chosen = normalise(mode)
     return detect_system_theme(app) if chosen == SYSTEM else chosen
@@ -330,7 +370,7 @@ def stylesheet(theme: str) -> str:
     return _TEMPLATE.format(**palette)
 
 
-def colours(mode: object, app: Any | None = None) -> dict[str, str]:
+def colours(mode: object, app: object | None = None) -> dict[str, str]:
     return PALETTES[resolve(mode, app)]
 
 
@@ -368,13 +408,15 @@ def palette_for(theme: str) -> QPalette:
     return palette
 
 
-def apply_theme(app: Any | None, mode: object) -> str:
-    """Install the sheet for ``mode`` and return the theme actually painted."""
-    from PySide6.QtWidgets import QApplication
+def apply_theme(app: object | None, mode: object) -> str:
+    """Install the sheet for ``mode`` and return the theme actually painted.
 
-    app = app or QApplication.instance()
-    theme = resolve(mode, app)
-    if app is not None:
-        app.setPalette(palette_for(theme))
-        app.setStyleSheet(stylesheet(theme))
+    Still returns the resolved theme when there is no application to paint —
+    the caller asked what the theme is, not only that it was installed.
+    """
+    application = _application(app)
+    theme = resolve(mode, application)
+    if application is not None:
+        application.setPalette(palette_for(theme))
+        application.setStyleSheet(stylesheet(theme))
     return theme
