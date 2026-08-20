@@ -1026,21 +1026,45 @@ def test_a_file_already_being_fetched_is_not_queued_twice(window) -> None:
 
 
 def test_settings_offers_an_update_check(window) -> None:
-    assert window.update_repo.text() == "", "no repository is configured by default"
-    assert window.update_startup.isChecked() is False
+    from lanlink.updates import DEFAULT_REPOSITORY
+
+    # An update system nobody configures is an update system nobody gets, so a
+    # fresh installation already points at the repository LanLink ships from.
+    assert window.update_repo.text() == DEFAULT_REPOSITORY
+    assert window.update_startup.isChecked() is True
     assert window.update_copy.isEnabled() is False, "there is no link to copy yet"
     assert mw.__version__ in window.update_status.text()
 
 
-def test_an_unconfigured_repository_asks_to_be_set_rather_than_failing(window) -> None:
+def test_clearing_the_repository_falls_back_to_the_one_lanlink_ships_from(window, monkeypatch) -> None:
+    from lanlink.updates import DEFAULT_REPOSITORY
+
+    asked: list[str] = []
+    monkeypatch.setattr(mw, "check_for_update", lambda repository, current: asked.append(repository))
     window.update_repo.setText("")
+    window.check_for_updates(quiet=True)
+    window.runner.wait(4000)
+    for _ in range(50):
+        QApplication.processEvents()
+
+    assert window.update_repo.text() == DEFAULT_REPOSITORY
+    assert asked == [DEFAULT_REPOSITORY], "an empty field must not mean an empty request"
+
+
+def test_a_nonsense_repository_is_reported_rather_than_crashing(window, monkeypatch) -> None:
+    def refuse(repository: str, current: str):
+        raise ValueError(f"{repository!r} is not owner/name")
+
+    monkeypatch.setattr(mw, "check_for_update", refuse)
+    window.update_repo.setText("not a repository")
     window.check_for_updates(quiet=True)
     window.runner.wait(4000)
     for _ in range(200):
         QApplication.processEvents()
-        if "Settings" in window.update_status.text():
+        if "failed" in window.update_status.text():
             break
-    assert "Settings" in window.update_status.text()
+
+    assert "failed" in window.update_status.text()
     assert window.update_copy.isEnabled() is False
 
 
@@ -1190,9 +1214,6 @@ def test_the_startup_check_respects_the_daily_interval(window) -> None:
     assert window._startup_check_is_due() is False, "off means off"
 
     theme_module.save_check_at_startup(True)
-    theme_module.save_update_repository("")
-    assert window._startup_check_is_due() is False, "no repository, nothing to ask"
-
     theme_module.save_update_repository("owner/lanlink")
     assert window._startup_check_is_due() is True, "never checked"
 
@@ -1211,3 +1232,29 @@ def test_update_now_without_a_check_warns_rather_than_downloading(window, monkey
     window.open_update_dialog()
 
     assert warned == ["Nothing to install"]
+
+
+# ------------------------------------------------------- the settings page fits
+
+
+def test_settings_scrolls_instead_of_crushing_its_fields(window) -> None:
+    """0.1.1 shipped a Settings page taller than the window.
+
+    Qt squeezed every row: the device name lost its descenders, the upload
+    limit lost half its box, and the cache path overlapped the line under it.
+    A scroll area gives the page the height it asks for.
+    """
+    from PySide6.QtWidgets import QScrollArea
+
+    holder = window.pages.widget(mw.PAGE_SETTINGS)
+    assert isinstance(holder, QScrollArea), "a long page needs somewhere to scroll"
+    assert holder.widgetResizable() is True
+
+    window.show_page(mw.PAGE_SETTINGS)
+    window.resize(900, 500)  # a laptop screen, shorter than the page
+    QApplication.processEvents()
+
+    page = holder.widget()
+    assert page.height() >= page.sizeHint().height(), "the page kept its natural height"
+    for field in (window.setting_name, window.setting_limit, window.update_repo):
+        assert field.height() >= field.sizeHint().height(), f"{field} was squeezed"

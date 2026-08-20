@@ -15,6 +15,8 @@ from PySide6.QtCore import QSettings
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QApplication
 
+from ..updates import DEFAULT_REPOSITORY
+
 ORGANISATION = "LanLink"
 APPLICATION = "LanLink"
 SETTINGS_KEY = "appearance/theme"
@@ -284,7 +286,13 @@ def _scheme_name(app: QApplication) -> str:
 
 
 def saved_update_repository() -> str:
-    return str(settings().value(UPDATE_REPOSITORY_KEY, "") or "").strip()
+    """The repository to check, falling back to the one LanLink ships from.
+
+    Someone who never opens Settings still gets update checks; someone who
+    points LanLink at their own fork still overrides it.
+    """
+    stored = str(settings().value(UPDATE_REPOSITORY_KEY, "") or "").strip()
+    return stored or DEFAULT_REPOSITORY
 
 
 def save_update_repository(repository: str) -> str:
@@ -296,7 +304,8 @@ def save_update_repository(repository: str) -> str:
 
 
 def checks_updates_at_startup() -> bool:
-    value = settings().value(UPDATE_AT_STARTUP_KEY, False)
+    """On unless it was turned off. A security fix nobody hears about is not one."""
+    value = settings().value(UPDATE_AT_STARTUP_KEY, True)
     return str(value).strip().lower() in {"true", "1", "yes"}
 
 

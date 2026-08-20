@@ -34,6 +34,11 @@ from . import __version__
 # api.github.com serves this without a token for public repositories, and the
 # unauthenticated rate limit is far more than a desktop application will use.
 RELEASES_URL = "https://api.github.com/repos/{repository}/releases"
+
+# Where LanLink itself is published. An empty setting means "the place this
+# build came from", not "never check" — an update system nobody configures is
+# an update system nobody gets.
+DEFAULT_REPOSITORY = "shabnurmaniyar07/lanlink"
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 DEFAULT_TIMEOUT = 8.0
 DOWNLOAD_TIMEOUT = 60.0

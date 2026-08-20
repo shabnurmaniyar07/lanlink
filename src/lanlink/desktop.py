@@ -10,6 +10,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from . import __version__
+from .logs import describe_environment, install_excepthook, start_logging
 from .state import DATA_DIR_ENV, SettingsCorruptError
 from .ui.main_window import MainWindow
 from .ui.theme import apply_theme, saved_theme
@@ -46,6 +47,12 @@ def main() -> None:
     options, remaining = parser.parse_known_args()
     if options.data_dir:
         os.environ[DATA_DIR_ENV] = options.data_dir
+
+    # Before anything that can fail: a frozen build has no console, so an
+    # exception with nowhere to print is one nobody can diagnose.
+    start_logging()
+    install_excepthook()
+    describe_environment(__version__)
 
     app = QApplication([sys.argv[0], *remaining])
     app.setApplicationName("LanLink")
