@@ -15,11 +15,16 @@ from PySide6.QtCore import QSettings
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QApplication
 
+from ..updates import DEFAULT_REPOSITORY
+
 ORGANISATION = "LanLink"
 APPLICATION = "LanLink"
 SETTINGS_KEY = "appearance/theme"
 UPDATE_REPOSITORY_KEY = "updates/repository"
 UPDATE_AT_STARTUP_KEY = "updates/check_at_startup"
+UPDATE_LAST_CHECK_KEY = "updates/last_check"
+UPDATE_LAST_VERSION_KEY = "updates/last_version"
+UPDATE_SKIPPED_KEY = "updates/skipped_version"
 
 SYSTEM = "system"
 LIGHT = "light"
@@ -281,7 +286,13 @@ def _scheme_name(app: QApplication) -> str:
 
 
 def saved_update_repository() -> str:
-    return str(settings().value(UPDATE_REPOSITORY_KEY, "") or "").strip()
+    """The repository to check, falling back to the one LanLink ships from.
+
+    Someone who never opens Settings still gets update checks; someone who
+    points LanLink at their own fork still overrides it.
+    """
+    stored = str(settings().value(UPDATE_REPOSITORY_KEY, "") or "").strip()
+    return stored or DEFAULT_REPOSITORY
 
 
 def save_update_repository(repository: str) -> str:
@@ -293,7 +304,8 @@ def save_update_repository(repository: str) -> str:
 
 
 def checks_updates_at_startup() -> bool:
-    value = settings().value(UPDATE_AT_STARTUP_KEY, False)
+    """On unless it was turned off. A security fix nobody hears about is not one."""
+    value = settings().value(UPDATE_AT_STARTUP_KEY, True)
     return str(value).strip().lower() in {"true", "1", "yes"}
 
 
@@ -302,6 +314,35 @@ def save_check_at_startup(enabled: bool) -> bool:
     store.setValue(UPDATE_AT_STARTUP_KEY, bool(enabled))
     store.sync()
     return bool(enabled)
+
+
+def saved_last_check() -> str:
+    """When the last successful check finished, so automatic checking can be daily."""
+    return str(settings().value(UPDATE_LAST_CHECK_KEY, "") or "")
+
+
+def saved_last_version() -> str:
+    """The newest version the last successful check saw."""
+    return str(settings().value(UPDATE_LAST_VERSION_KEY, "") or "")
+
+
+def save_last_check(timestamp: str, latest_version: str) -> None:
+    store = settings()
+    store.setValue(UPDATE_LAST_CHECK_KEY, timestamp)
+    store.setValue(UPDATE_LAST_VERSION_KEY, latest_version)
+    store.sync()
+
+
+def saved_skipped_version() -> str:
+    return str(settings().value(UPDATE_SKIPPED_KEY, "") or "")
+
+
+def save_skipped_version(version: str) -> str:
+    cleaned = (version or "").strip()
+    store = settings()
+    store.setValue(UPDATE_SKIPPED_KEY, cleaned)
+    store.sync()
+    return cleaned
 
 
 def detect_system_theme(app: object | None = None) -> str:
@@ -377,7 +418,11 @@ def palette_for(theme: str) -> QPalette:
 
 
 def apply_theme(app: object | None, mode: object) -> str:
-    """Install the sheet for ``mode`` and return the theme actually painted."""
+    """Install the sheet for ``mode`` and return the theme actually painted.
+
+    Still returns the resolved theme when there is no application to paint —
+    the caller asked what the theme is, not only that it was installed.
+    """
     application = _application(app)
     theme = resolve(mode, application)
     if application is not None:

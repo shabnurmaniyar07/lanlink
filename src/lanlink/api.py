@@ -456,10 +456,11 @@ def create_app(state: HubState) -> FastAPI:
         text = str(body.get("text", ""))
         set_system_clipboard(text)
         try:
-            from PySide6.QtWidgets import QApplication
-            app_instance = QApplication.instance()
-            if app_instance:
-                app_instance.clipboard().setText(text)
+            from PySide6.QtGui import QGuiApplication
+
+            gui_app = QGuiApplication.instance()
+            if isinstance(gui_app, QGuiApplication):
+                gui_app.clipboard().setText(text)
         except Exception:
             pass
         return {"status": "ok", "length": len(text)}

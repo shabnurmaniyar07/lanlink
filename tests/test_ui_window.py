@@ -1026,21 +1026,47 @@ def test_a_file_already_being_fetched_is_not_queued_twice(window) -> None:
 
 
 def test_settings_offers_an_update_check(window) -> None:
-    assert window.update_repo.text() == "", "no repository is configured by default"
-    assert window.update_startup.isChecked() is False
+    from lanlink.updates import DEFAULT_REPOSITORY
+
+    # An update system nobody configures is an update system nobody gets, so a
+    # fresh installation already points at the repository LanLink ships from.
+    assert window.update_repo.text() == DEFAULT_REPOSITORY
+    assert window.update_startup.isChecked() is True
     assert window.update_copy.isEnabled() is False, "there is no link to copy yet"
     assert mw.__version__ in window.update_status.text()
 
 
-def test_an_unconfigured_repository_asks_to_be_set_rather_than_failing(window) -> None:
+def test_clearing_the_repository_falls_back_to_the_one_lanlink_ships_from(window, monkeypatch) -> None:
+    from lanlink.updates import DEFAULT_REPOSITORY
+
+    asked: list[str] = []
+    monkeypatch.setattr(mw, "check_for_update", lambda repository, current: asked.append(repository))
+    window.runner.wait(1000)
+    asked.clear()
     window.update_repo.setText("")
+    window.check_for_updates(quiet=True)
+    window.runner.wait(4000)
+    for _ in range(50):
+        QApplication.processEvents()
+
+    assert window.update_repo.text() == DEFAULT_REPOSITORY
+    assert asked == [DEFAULT_REPOSITORY], "an empty field must not mean an empty request"
+
+
+def test_a_nonsense_repository_is_reported_rather_than_crashing(window, monkeypatch) -> None:
+    def refuse(repository: str, current: str):
+        raise ValueError(f"{repository!r} is not owner/name")
+
+    monkeypatch.setattr(mw, "check_for_update", refuse)
+    window.update_repo.setText("not a repository")
     window.check_for_updates(quiet=True)
     window.runner.wait(4000)
     for _ in range(200):
         QApplication.processEvents()
-        if "Settings" in window.update_status.text():
+        if "failed" in window.update_status.text():
             break
-    assert "Settings" in window.update_status.text()
+
+    assert "failed" in window.update_status.text()
     assert window.update_copy.isEnabled() is False
 
 
@@ -1086,3 +1112,151 @@ def test_checking_for_updates_never_blocks_the_window(window, monkeypatch) -> No
     source = inspect.getsource(mw.MainWindow.check_for_updates)
     assert "self.runner.run(" in source
     assert "check_for_update(" in source
+
+
+# ------------------------------------------------- the update system in place
+
+
+def _update_check(version: str = "0.2.0", *, checksums: bool = True):
+    from lanlink.updates import CHECKSUM_ASSET, Asset, Release, UpdateCheck, UpdateStatus, Version
+
+    assets = [Asset(f"LanLinkSetup-{version}.exe", "https://x/setup.exe", 1000)]
+    if checksums:
+        assets.append(Asset(CHECKSUM_ASSET, "https://x/SHA256SUMS.txt", 100))
+    return UpdateCheck(
+        UpdateStatus.UPDATE_AVAILABLE,
+        f"LanLink {version} is available. You are running {mw.__version__}.",
+        Release(Version.parse(version), f"LanLink {version}", "Notes", "https://x/page",
+                "https://x/setup.exe", assets=tuple(assets)),
+        Version.parse(mw.__version__),
+    )
+
+
+def test_settings_shows_the_current_and_latest_version(window) -> None:
+    assert window.update_current.text() == mw.__version__
+    assert window.update_latest.text() == "not checked yet"
+    assert window.update_now.isEnabled() is False, "nothing to install before a check"
+
+
+def test_being_up_to_date_says_so_in_those_words(window) -> None:
+    from lanlink.updates import Release, UpdateCheck, UpdateStatus, Version
+
+    check = UpdateCheck(
+        UpdateStatus.UP_TO_DATE,
+        f"LanLink {mw.__version__} is the newest version.",
+        Release(Version.parse(mw.__version__), "", "", "", ""),
+        Version.parse(mw.__version__),
+    )
+    window._apply_update_check(check)
+
+    assert window.update_status.text() == "You're up to date."
+    assert window.update_latest.text() == mw.__version__
+    assert window.update_now.isEnabled() is False
+
+
+def test_an_update_enables_update_now_and_remembers_the_check(window) -> None:
+    from lanlink.ui import theme as theme_module
+
+    window._apply_update_check(_update_check(), quiet=True)
+
+    assert window.update_now.isEnabled()
+    assert window.update_latest.text() == "0.2.0"
+    assert window.update_banner.isHidden() is False, "the quiet check puts a line up"
+    assert theme_module.saved_last_version() == "0.2.0"
+    assert theme_module.saved_last_check(), "a successful check is cached"
+
+
+def test_an_unverifiable_release_does_not_offer_to_install(window) -> None:
+    window._apply_update_check(_update_check(checksums=False), quiet=True)
+
+    assert window.update_now.isEnabled() is False
+    assert window.update_copy.isEnabled(), "the link is still there to copy"
+
+
+def test_a_failed_check_does_not_postpone_the_next_one(window) -> None:
+    from lanlink.ui import theme as theme_module
+    from lanlink.updates import UpdateCheck, UpdateStatus, Version
+
+    window._apply_update_check(
+        UpdateCheck(UpdateStatus.FAILED, "Could not reach GitHub.", None, Version.parse("0.1.0"))
+    )
+
+    assert theme_module.saved_last_check() == "", "a failure must not count as a daily check"
+    assert window.update_now.isEnabled() is False
+
+
+def test_a_skipped_version_is_not_announced_again(window) -> None:
+    from lanlink.ui import theme as theme_module
+
+    theme_module.save_skipped_version("0.2.0")
+    window._apply_update_check(_update_check("0.2.0"), quiet=True)
+    assert window.update_banner.isHidden(), "the user asked not to hear about this one"
+
+    window._apply_update_check(_update_check("0.3.0"), quiet=True)
+    assert window.update_banner.isHidden() is False, "a newer version is still announced"
+
+
+def test_skipping_records_the_version_and_hides_the_banner(window) -> None:
+    from lanlink.ui import theme as theme_module
+
+    window._apply_update_check(_update_check(), quiet=True)
+    window._skip_version("0.2.0")
+
+    assert theme_module.saved_skipped_version() == "0.2.0"
+    assert window.update_banner.isHidden()
+    assert "Skipping" in window.update_status.text()
+
+
+def test_the_startup_check_respects_the_daily_interval(window) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from lanlink.ui import theme as theme_module
+
+    theme_module.save_check_at_startup(False)
+    assert window._startup_check_is_due() is False, "off means off"
+
+    theme_module.save_check_at_startup(True)
+    theme_module.save_update_repository("owner/lanlink")
+    assert window._startup_check_is_due() is True, "never checked"
+
+    theme_module.save_last_check(datetime.now(UTC).isoformat(), "0.1.0")
+    assert window._startup_check_is_due() is False, "checked an hour ago"
+
+    theme_module.save_last_check((datetime.now(UTC) - timedelta(days=2)).isoformat(), "0.1.0")
+    assert window._startup_check_is_due() is True
+
+
+def test_update_now_without_a_check_warns_rather_than_downloading(window, monkeypatch) -> None:
+    warned = []
+    monkeypatch.setattr(window, "_warn", lambda title, body: warned.append(title))
+    window._update_check = None
+
+    window.open_update_dialog()
+
+    assert warned == ["Nothing to install"]
+
+
+# ------------------------------------------------------- the settings page fits
+
+
+def test_settings_scrolls_instead_of_crushing_its_fields(window) -> None:
+    """0.1.1 shipped a Settings page taller than the window.
+
+    Qt squeezed every row: the device name lost its descenders, the upload
+    limit lost half its box, and the cache path overlapped the line under it.
+    A scroll area gives the page the height it asks for.
+    """
+    from PySide6.QtWidgets import QScrollArea
+
+    holder = window.pages.widget(mw.PAGE_SETTINGS)
+    assert isinstance(holder, QScrollArea), "a long page needs somewhere to scroll"
+    assert holder.widgetResizable() is True
+
+    window.show_page(mw.PAGE_SETTINGS)
+    window.resize(900, 500)  # a laptop screen, shorter than the page
+    QApplication.processEvents()
+
+    page = holder.widget()
+    assert page.height() >= page.sizeHint().height(), "the page kept its natural height"
+    for field in (window.setting_name, window.setting_limit, window.update_repo):
+        assert field.height() >= field.sizeHint().height(), f"{field} was squeezed"
