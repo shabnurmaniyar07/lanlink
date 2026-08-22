@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lanlink-hub"
-version = "0.1.0"
+version = "0.1.3"
 description = "Private local-network file-sharing hub for computers and phones"
 readme = "README.md"
 requires-python = ">=3.11"

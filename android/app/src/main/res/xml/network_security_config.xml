@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  LanLink pins per device, at runtime, against the certificate confirmed during
+  pairing (protocol §4). That is done by PinnedTrustManager in android/core,
+  NOT here: a Network Security Config pins against a hostname, and LanLink's
+  peers are IP addresses on a home network that change with the DHCP lease.
+
+  This file exists to say the opposite of what such a file usually says:
+  cleartext is off. Nothing in the app talks HTTP unless a person deliberately
+  turns TLS off on the PC for troubleshooting, and the invite parser refuses
+  those invites anyway.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

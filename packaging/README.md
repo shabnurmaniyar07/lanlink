@@ -30,47 +30,18 @@ there. Get it from <https://jrsoftware.org/isdl.php> if you want the installer.
 
 ## Publishing an update
 
-Push a tag and GitHub does the rest:
-
 1. Raise `__version__` in `src/lanlink/__init__.py`.
-2. `python tools/sync_version.py`
-3. Commit, then `git tag v<version> && git push origin v<version>`.
+2. `packaging\build.bat`
+3. Create a GitHub release tagged `v<version>` and attach
+   `LanLinkSetup-<version>.exe`.
 
-The release workflow builds on a Windows runner and attaches **three** files to
-a draft release:
-
-| Artifact | Why |
-|---|---|
-| `LanLinkSetup-<version>.exe` | What LanLink downloads and runs |
-| `LanLink-<version>-portable.zip` | For people who would rather not install |
-| `SHA256SUMS.txt` | **Required.** Without it no LanLink will install the update |
-
-That last one is not optional. LanLink verifies the installer against the digest
-published in the same release and refuses to run anything it cannot check, so a
-release without `SHA256SUMS.txt` is a release nobody can auto-update to — the
-Update Now button stays disabled and the dialog says why.
-
-`build.bat` produces the same three files locally if you would rather build by
-hand.
+Every LanLink with that repository set under **Settings → Updates** will then
+notice the new version, show what changed and offer the download link. LanLink
+never downloads or installs anything by itself — that stays your decision, and
+the user's.
 
 Drafts and pre-releases are ignored, and a release older than what is running is
 never offered, so a yanked build cannot talk somebody into downgrading.
-
-## What the update actually does
-
-1. Once a day at most, LanLink asks the GitHub releases API for the newest
-   stable release. Nothing is downloaded by the check.
-2. If there is a newer one it puts a line at the top of the window. It does not
-   interrupt with a dialog.
-3. The user opens it, reads the release notes, and presses **Update Now**.
-4. The installer downloads with a progress bar, off the UI thread, cancellable.
-5. Its SHA-256 is compared against `SHA256SUMS.txt` from the same release. On a
-   mismatch the file is **deleted** and nothing runs.
-6. Only then does the installer start. It closes LanLink, upgrades in place, and
-   offers to start LanLink again.
-7. Settings, the device identity, its certificate, pairings, shared folders and
-   history all live outside the installation directory and are untouched. Nobody
-   has to pair again.
 
 ## Files
 

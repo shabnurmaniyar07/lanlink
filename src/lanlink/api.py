@@ -444,6 +444,41 @@ def create_app(state: HubState) -> FastAPI:
             )
         return {"revoked": state.revoke(client_id)}
 
+    @app.get("/v1/clipboard")
+    def get_clipboard(caller: PairedDevice = Depends(require_pairing)) -> dict:
+        from .remote import get_system_clipboard
+        return {"text": get_system_clipboard()}
+
+    @app.post("/v1/clipboard")
+    async def post_clipboard(request: Request, caller: PairedDevice = Depends(require_pairing)) -> dict:
+        from .remote import set_system_clipboard
+        body = await request.json()
+        text = str(body.get("text", ""))
+        set_system_clipboard(text)
+        try:
+            from PySide6.QtWidgets import QApplication
+            app_instance = QApplication.instance()
+            if app_instance:
+                app_instance.clipboard().setText(text)
+        except Exception:
+            pass
+        return {"status": "ok", "length": len(text)}
+
+    @app.post("/v1/remote/mouse")
+    async def remote_mouse(request: Request, caller: PairedDevice = Depends(require_pairing)) -> dict:
+        from .remote import handle_mouse_event
+        data = await request.json()
+        ok = handle_mouse_event(data)
+        return {"result": "ok" if ok else "ignored"}
+
+    @app.post("/v1/remote/media")
+    async def remote_media(request: Request, caller: PairedDevice = Depends(require_pairing)) -> dict:
+        from .remote import handle_media_event
+        data = await request.json()
+        action = str(data.get("action", ""))
+        ok = handle_media_event(action)
+        return {"result": "ok" if ok else "ignored"}
+
     return app
 
 

@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
-    QFrame,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -31,7 +30,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QScrollArea,
     QSpinBox,
     QSplitter,
     QStackedWidget,
@@ -45,7 +43,6 @@ from ..client import LanLinkClient
 from ..crypto import fetch_peer_certificate, fingerprint_of_pem, secrets_are_protected, short_fingerprint
 from ..discovery import DiscoveryBrowser, local_ipv4_address_strings
 from ..invite import InvalidInvite, Invite, parse_invite
-from ..logs import log_folder
 from ..pairing_request import PAIRING_WAIT_SECONDS, PairingOutcome, PairingRequest
 from ..server import LocalService
 from ..staging import RemoteFile, RemoteFileStager
@@ -60,15 +57,7 @@ from ..transfers import (
     upload_folder_runner,
     upload_runner,
 )
-from ..updates import (
-    UpdateCheck,
-    UpdateStatus,
-    check_for_update,
-    is_check_due,
-    is_skipped,
-    timestamp,
-    updates_folder,
-)
+from ..updates import UpdateCheck, check_for_update
 from .browser_model import EntryFilterProxy, RemoteEntryModel, format_size, format_time
 from .devices import DeviceListModel, DeviceStatus, HealthTracker, UnifiedDevice, merge_devices
 from .dragdrop import entry_to_remote, plan_drag
@@ -79,20 +68,14 @@ from .theme import (
     apply_theme,
     checks_updates_at_startup,
     save_check_at_startup,
-    save_last_check,
-    save_skipped_version,
     save_theme,
     save_update_repository,
-    saved_last_check,
-    saved_last_version,
-    saved_skipped_version,
     saved_theme,
     saved_update_repository,
     theme_choices,
 )
 from .thumbnails import ThumbnailCache
 from .transfer_model import TransferTableModel, summarise
-from .updater import UpdateBanner, UpdateDialog
 from .widgets import Breadcrumb, DropListView, DropTreeView, ProgressDelegate, open_local_file
 
 PAGES = ["My Device", "Devices", "Transfers", "Shared Folders", "History", "Settings"]
@@ -393,12 +376,9 @@ class MainWindow(QMainWindow):
         self._start_timers()
 
         self._update_link = ""
-        self._update_check: UpdateCheck | None = None
-        self._installing = False
-        if self._startup_check_is_due():
-            # Quietly, and at most once a day: a version check must never be the
-            # first thing a person is asked about when they open the application,
-            # and ten launches before lunch is not ten requests to GitHub.
+        if checks_updates_at_startup() and saved_update_repository():
+            # Quietly: a version check must never be the first thing a person
+            # is asked about when they open the application.
             QTimer.singleShot(2500, lambda: self.check_for_updates(quiet=True))
 
     # ------------------------------------------------------------------ layout
@@ -415,24 +395,15 @@ class MainWindow(QMainWindow):
         self.sidebar.currentRowChanged.connect(self._sidebar_changed)
         splitter.addWidget(self.sidebar)
 
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
-        self.update_banner = UpdateBanner()
-        self.update_banner.detailsRequested.connect(self.open_update_dialog)
-        right_layout.addWidget(self.update_banner)
-
         self.pages = QStackedWidget()
         self.pages.addWidget(self._build_my_device())
         self.pages.addWidget(self._build_devices())
         self.pages.addWidget(self._build_transfers())
         self.pages.addWidget(self._build_shares())
         self.pages.addWidget(self._build_history())
-        self.pages.addWidget(self._scrollable(self._build_settings()))
+        self.pages.addWidget(self._build_settings())
         self.pages.addWidget(self._build_browser())
-        right_layout.addWidget(self.pages, 1)
-        splitter.addWidget(right)
+        splitter.addWidget(self.pages)
         splitter.setStretchFactor(1, 1)
 
         self.setCentralWidget(splitter)
@@ -450,21 +421,6 @@ class MainWindow(QMainWindow):
         caption.setObjectName("muted")
         layout.addWidget(caption)
         return page, layout
-
-    def _scrollable(self, page: QWidget) -> QScrollArea:
-        """Let a long page keep its natural height.
-
-        A page taller than the window is squeezed by the layout: fields lose
-        rows, labels lose descenders, and Settings becomes unreadable on a
-        laptop screen. A scroll area gives the page the height it asks for and
-        moves the shortfall to a scrollbar, where it belongs.
-        """
-        area = QScrollArea()
-        area.setWidget(page)
-        area.setWidgetResizable(True)
-        area.setFrameShape(QFrame.Shape.NoFrame)
-        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        return area
 
     def _heading(self, text: str) -> QLabel:
         """A section heading inside a page. Its colour comes from the theme."""
@@ -835,7 +791,6 @@ class MainWindow(QMainWindow):
             ("Open cache folder", self.open_cache_folder),
             ("Clear staged files", self.clear_staging_cache),
             ("Clear thumbnails", self.clear_thumbnail_cache),
-            ("Open log folder", self.open_log_folder),
         ]:
             button = QPushButton(label)
             button.clicked.connect(slot)
@@ -858,13 +813,9 @@ class MainWindow(QMainWindow):
         self.update_repo.setPlaceholderText("owner/name, for example lanlink/lanlink")
         self.update_repo.setToolTip("The GitHub repository whose releases LanLink should look at.")
         update_form.addRow("Release repository:", self.update_repo)
-        self.update_startup = QCheckBox("Check for updates on startup, at most once a day")
+        self.update_startup = QCheckBox("Check once when LanLink starts")
         self.update_startup.setChecked(checks_updates_at_startup())
         update_form.addRow("Automatically:", self.update_startup)
-        self.update_current = QLabel(__version__)
-        update_form.addRow("Current version:", self.update_current)
-        self.update_latest = QLabel(saved_last_version() or "not checked yet")
-        update_form.addRow("Latest version:", self.update_latest)
         self.update_status = QLabel(f"Running version {__version__}.")
         self.update_status.setWordWrap(True)
         self.update_status.setObjectName("muted")
@@ -875,11 +826,6 @@ class MainWindow(QMainWindow):
         self.update_button = QPushButton("Check for updates")
         self.update_button.clicked.connect(self.check_for_updates)
         update_row.addWidget(self.update_button)
-        self.update_now = QPushButton("Update Now")
-        self.update_now.setEnabled(False)
-        self.update_now.setToolTip("Download the installer, verify it, and run it")
-        self.update_now.clicked.connect(self.open_update_dialog)
-        update_row.addWidget(self.update_now)
         self.update_copy = QPushButton("Copy download link")
         self.update_copy.setEnabled(False)
         self.update_copy.clicked.connect(self.copy_update_link)
@@ -888,10 +834,8 @@ class MainWindow(QMainWindow):
         layout.addLayout(update_row)
 
         update_note = QLabel(
-            "Updates come from that repository's published releases — never a branch. "
-            "Nothing installs on its own: you decide when to download, the installer is checked "
-            "against the SHA-256 published with the release before it is allowed to run, and your "
-            "settings, this device's identity and its paired devices are kept."
+            "LanLink never installs anything by itself. It only tells you a newer version exists "
+            "and gives you the link; downloading and running the installer stays your decision."
         )
         update_note.setWordWrap(True)
         update_note.setObjectName("muted")
@@ -1036,12 +980,6 @@ class MainWindow(QMainWindow):
     def open_cache_folder(self) -> None:
         self.stager.root.mkdir(parents=True, exist_ok=True)
         open_local_file(self.stager.root)
-
-    def open_log_folder(self) -> None:
-        """Where to look when LanLink misbehaves, without asking for a screenshot."""
-        folder = log_folder()
-        folder.mkdir(parents=True, exist_ok=True)
-        open_local_file(folder)
 
     def clear_staging_cache(self) -> None:
         removed = self.stager.clear()
@@ -1399,8 +1337,8 @@ class MainWindow(QMainWindow):
         self.entry_model.set_entries(entries)
         writable = "w" in (self.current_share or {}).get("permissions", "")
         self._set_drops_enabled(writable)
-        files = sum(1 for entry in entries if entry.get("kind") == "file")
-        folders = len(entries) - files
+        files = sum(1 for entry in self.entry_model.entries() if entry.get("kind") == "file")
+        folders = len(self.entry_model.entries()) - files
         hint = f"{folders} folder(s), {files} file(s)."
         if writable:
             hint = f"{hint}  Drag files here to upload them."
@@ -2255,27 +2193,11 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------------- updates
 
-    def _startup_check_is_due(self) -> bool:
-        if not checks_updates_at_startup() or not saved_update_repository():
-            return False
-        return is_check_due(saved_last_check())
-
     def check_for_updates(self, quiet: bool = False) -> None:
-        """Ask GitHub, off the GUI thread. Never downloads, never installs.
-
-        `quiet` is the automatic check: it may put a line at the top of the page
-        but must not open a dialog. Somebody who opened LanLink to move a file
-        does not want a modal about versions.
-        """
-        save_update_repository(self.update_repo.text())
-        # Emptying the field means "the repository LanLink ships from", not
-        # "never check": saved_update_repository supplies the default.
-        repository = saved_update_repository()
-        self.update_repo.setText(repository)
+        """Ask GitHub, off the GUI thread. Never downloads, never installs."""
+        repository = save_update_repository(self.update_repo.text())
         self._update_link = ""
-        self._update_check = None
         self.update_copy.setEnabled(False)
-        self.update_now.setEnabled(False)
         self.update_button.setEnabled(False)
         self.update_status.setText("Checking…")
 
@@ -2288,68 +2210,19 @@ class MainWindow(QMainWindow):
             if check is None:
                 self.update_status.setText("The update check returned nothing.")
                 return
-            self._apply_update_check(check, quiet=quiet)
+            self.update_status.setText(check.message)
+            self._update_link = check.link
+            self.update_copy.setEnabled(bool(check.link))
+            if check.has_update and not quiet:
+                self._show_release(check)
+            elif check.has_update:
+                self.status_line.showMessage(check.message, 12000)
 
         def failed(message: str) -> None:
             self.update_button.setEnabled(True)
             self.update_status.setText(f"The update check failed: {message}")
 
         self.runner.run(work, ready, failed)
-
-    def _apply_update_check(self, check: UpdateCheck, quiet: bool = False) -> None:
-        self._update_check = check
-        self._update_link = check.link
-        self.update_copy.setEnabled(bool(check.link))
-        self.update_now.setEnabled(bool(check.can_install))
-
-        latest = str(check.latest) if check.latest else ""
-        if latest:
-            self.update_latest.setText(latest)
-        if check.status is UpdateStatus.UP_TO_DATE:
-            self.update_status.setText("You're up to date.")
-        else:
-            self.update_status.setText(check.message)
-
-        # Only a successful check is worth remembering; a failure must not
-        # postpone the next attempt by a day.
-        if check.status in {UpdateStatus.UP_TO_DATE, UpdateStatus.UPDATE_AVAILABLE}:
-            save_last_check(timestamp(), latest)
-
-        if not check.has_update:
-            self.update_banner.hide()
-            return
-        if quiet and check.latest is not None and is_skipped(check.latest, saved_skipped_version()):
-            return
-        if quiet:
-            self.update_banner.show_update(latest, __version__)
-            self.status_line.showMessage(check.message, 12000)
-        else:
-            self.open_update_dialog()
-
-    def open_update_dialog(self) -> None:
-        """The one place an installer can be downloaded, and only on request."""
-        check = getattr(self, "_update_check", None)
-        if check is None or not check.has_update:
-            self._warn("Nothing to install", "Check for updates first.")
-            return
-        dialog = UpdateDialog(check, updates_folder(self.stager.root.parent), self)
-        dialog.skipRequested.connect(self._skip_version)
-        dialog.installStarting.connect(self._quit_for_installer)
-        dialog.exec()
-        dialog.deleteLater()
-
-    def _skip_version(self, version: str) -> None:
-        save_skipped_version(version)
-        self.update_banner.hide()
-        self.update_status.setText(
-            f"Skipping LanLink {version}. You will be told about the version after it."
-        )
-
-    def _quit_for_installer(self) -> None:
-        """The installer is running; get out of its way so it can replace us."""
-        self.status_line.showMessage("Closing LanLink so the installer can run…", 5000)
-        self._installing = True
-        QTimer.singleShot(400, self.close)
 
     def _show_release(self, check: UpdateCheck) -> None:
         release = check.release

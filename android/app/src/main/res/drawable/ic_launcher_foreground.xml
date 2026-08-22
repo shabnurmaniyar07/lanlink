@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Two devices and the link between them, drawn rather than imported so the
+     project carries no binary asset it cannot explain. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M28,38h20a4,4 0 0 1 4,4v24a4,4 0 0 1 -4,4h-20a4,4 0 0 1 -4,-4v-24a4,4 0 0 1 4,-4zM30,44v20h16v-20z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M62,34h18a4,4 0 0 1 4,4v32a4,4 0 0 1 -4,4h-18a4,4 0 0 1 -4,-4v-32a4,4 0 0 1 4,-4zM64,40v28h14v-28z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M52,52h8v4h-8z" />
+</vector>

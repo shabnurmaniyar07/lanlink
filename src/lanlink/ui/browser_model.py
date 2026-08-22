@@ -126,7 +126,13 @@ class RemoteEntryModel(QAbstractTableModel):
 
     def set_entries(self, entries: list[dict]) -> None:
         self.beginResetModel()
-        self._entries = list(entries)
+        normalized = []
+        for entry in entries:
+            e = dict(entry)
+            if "kind" not in e or not e["kind"]:
+                e["kind"] = "folder" if e.get("is_dir") else "file"
+            normalized.append(e)
+        self._entries = normalized
         self._thumbnails.clear()
         self.endResetModel()
 
@@ -135,7 +141,8 @@ class RemoteEntryModel(QAbstractTableModel):
         return [
             entry
             for entry in self._entries
-            if entry.get("kind") == "file" and describe(str(entry.get("name", ""))).can_thumbnail
+            if (entry.get("kind") == "file" or not entry.get("is_dir"))
+            and describe(str(entry.get("name", ""))).can_thumbnail
         ]
 
     def entry_at(self, row: int) -> dict | None:

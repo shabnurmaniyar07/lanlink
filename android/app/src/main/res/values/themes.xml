@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose paints the window; this only has to exist before it does, and
+         must follow the system so the launch screen is not the wrong colour. -->
+    <style name="Theme.LanLink" parent="android:Theme.DeviceDefault.DayNight" />
+</resources>

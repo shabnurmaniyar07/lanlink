@@ -26,7 +26,7 @@ echo Installing LanLink and the build tools
 "%PY%" -m pip install pyinstaller --quiet || goto :failed
 
 echo Reading the version
-for /f "delims=" %%v in ('"%PY%" -c "import sys;sys.path.insert(0,'src');import lanlink;print(lanlink.__version__)"') do set VERSION=%%v
+for /f "usebackq delims=" %%v in (`%PY% tools\print_version.py`) do set VERSION=%%v
 if "%VERSION%"=="" goto :failed
 echo   version %VERSION%
 
@@ -51,6 +51,7 @@ echo   built dist\LanLink\LanLink.exe
 set ISCC=
 if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" set ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe
 if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" set ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe
+if exist "%LocalAppData%\Programs\Inno Setup 6\ISCC.exe" set ISCC=%LocalAppData%\Programs\Inno Setup 6\ISCC.exe
 
 if "%ISCC%"=="" (
     echo.
@@ -65,23 +66,11 @@ echo Building the installer
 "%ISCC%" /DAppVersion=%VERSION% packaging\lanlink.iss || goto :failed
 echo   built packaging\output\LanLinkSetup-%VERSION%.exe
 
-echo Packing the portable zip
-powershell -NoProfile -Command "Compress-Archive -Force -Path dist\LanLink\* -DestinationPath packaging\output\LanLink-%VERSION%-portable.zip" || goto :failed
-
-echo Writing SHA256SUMS.txt
-powershell -NoProfile -Command "Push-Location packaging\output; Get-ChildItem -File ^| Where-Object { $_.Name -ne 'SHA256SUMS.txt' } ^| ForEach-Object { $h=(Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(); \"$h  $($_.Name)\" } ^| Set-Content -Encoding ascii SHA256SUMS.txt; Pop-Location" || goto :failed
-echo   built packaging\output\SHA256SUMS.txt
-
 :done
 echo.
 echo === Finished ======================================================
 echo   Application:  dist\LanLink\LanLink.exe
 if not "%ISCC%"=="" echo   Installer:    packaging\output\LanLinkSetup-%VERSION%.exe
-if not "%ISCC%"=="" echo   Portable:     packaging\output\LanLink-%VERSION%-portable.zip
-if not "%ISCC%"=="" echo   Checksums:    packaging\output\SHA256SUMS.txt
-echo.
-echo Attach all three to the GitHub release. Without SHA256SUMS.txt no LanLink
-echo will install the update, because it cannot verify what it downloaded.
 echo.
 echo Publish the installer as a GitHub release tagged v%VERSION% and every
 echo LanLink with that repository configured will notice the new version.

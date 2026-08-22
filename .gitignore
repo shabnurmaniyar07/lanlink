@@ -19,3 +19,6 @@ android/**/classes/
 *.pem
 settings.json
 settings.json.bak
+
+.kotlin/
+*.salive

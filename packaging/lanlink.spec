@@ -23,6 +23,7 @@ hidden = [
     *collect_submodules("zeroconf"),
     "lanlink.ui.theme",
     "lanlink.updates",
+    "lanlink.remote",
 ]
 
 analysis = Analysis(  # noqa: F821

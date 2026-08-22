@@ -152,6 +152,61 @@ paths:
                 type: object
           description: Successful Response
       summary: Health
+  /v1/clipboard:
+    get:
+      operationId: get_clipboard_v1_clipboard_get
+      parameters:
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Get Clipboard V1 Clipboard Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Get Clipboard
+    post:
+      operationId: post_clipboard_v1_clipboard_post
+      parameters:
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Post Clipboard V1 Clipboard Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Post Clipboard
   /v1/device:
     get:
       operationId: device_v1_device_get
@@ -382,6 +437,62 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
           description: Validation Error
       summary: Revoke Pairing
+  /v1/remote/media:
+    post:
+      operationId: remote_media_v1_remote_media_post
+      parameters:
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Remote Media V1 Remote Media Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Remote Media
+  /v1/remote/mouse:
+    post:
+      operationId: remote_mouse_v1_remote_mouse_post
+      parameters:
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Remote Mouse V1 Remote Mouse Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Remote Mouse
   /v1/shares:
     get:
       operationId: shares_v1_shares_get

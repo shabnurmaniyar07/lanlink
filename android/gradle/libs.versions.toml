@@ -1,0 +1,48 @@
+# VERSIONS TO VERIFY ON THE WINDOWS BUILD.
+#
+# Nothing here has been resolved: this project was written in a container with
+# no access to Google's Maven or Maven Central. Android Studio will tell you
+# quickly if one is wrong — a plugin or dependency that "was not found in any of
+# the following sources" is a version to correct here, not a code fault.
+#
+# The pairs that must agree with each other:
+#   * kotlin and kotlin-compose must be the SAME version (since Kotlin 2.0 the
+#     Compose compiler ships as a Kotlin plugin).
+#   * agp needs Gradle >= 8.9; the wrapper here is 8.14.3.
+#   * agp 8.7.x expects JDK 17 or newer to run Gradle.
+
+[versions]
+agp = "8.7.3"
+kotlin = "2.0.21"
+coreKtx = "1.15.0"
+lifecycle = "2.8.7"
+activityCompose = "1.9.3"
+composeBom = "2024.12.01"
+securityCrypto = "1.1.0-alpha06"
+documentfile = "1.0.1"
+coroutines = "1.9.0"
+# QR scanning. Maintained wrapper around ZXing with its own scanner Activity,
+# so no CameraX/Compose plumbing is needed. VERIFY on the Windows build.
+zxing = "4.3.0"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+androidx-compose-material-icons = { group = "androidx.compose.material", name = "material-icons-extended" }
+androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
+androidx-documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+zxing-embedded = { group = "com.journeyapps", name = "zxing-android-embedded", version.ref = "zxing" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

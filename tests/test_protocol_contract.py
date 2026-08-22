@@ -92,6 +92,10 @@ DOCUMENTED_ROUTES = {
     ("GET", "/v1/shares/{share_id}/properties"),
     ("POST", "/v1/operations"),
     ("DELETE", "/v1/pairings/{client_id}"),
+    ("GET", "/v1/clipboard"),
+    ("POST", "/v1/clipboard"),
+    ("POST", "/v1/remote/mouse"),
+    ("POST", "/v1/remote/media"),
 }
 
 

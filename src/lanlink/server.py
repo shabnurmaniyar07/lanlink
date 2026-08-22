@@ -103,13 +103,6 @@ class LocalService:
             host=self.host,
             port=self.port,
             log_level="warning",
-            # A windowed .exe has no stdout, and uvicorn's default logging
-            # configuration asks stdout whether it is a terminal at the moment
-            # it is applied. None is not a terminal; it is not anything, and
-            # the application died before its window ever appeared. Declining
-            # the default also leaves LanLink's own logging alone, which is
-            # what an embedded library should do in any case.
-            log_config=None,
             ssl_certfile=str(certificate.certificate_path) if certificate else None,
             ssl_keyfile=str(certificate.key_path) if certificate else None,
         )

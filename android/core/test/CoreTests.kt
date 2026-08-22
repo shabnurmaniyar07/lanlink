@@ -190,14 +190,26 @@ fun registerCoreTests() {
     }
 
     Suite.test("a path that would leave the share is refused") {
-        for (path in listOf("../secret", "..", "a/../../b", "/etc/passwd", "//server/share", "C:/Windows", "a//b")) {
+        for (path in listOf(
+            "../secret", "..", "a/../../b", "/etc/passwd", "/home/user/file.txt",
+            "//server/share", "\\\\server\\share", "C:/Windows", "C:\\Windows\\win.ini", "D:file.txt",
+            "a//b", "My Documents/../../secret.txt", "Vacation Photos/../escape",
+            "Project Files/ bad leading/file.txt", "Project Files/bad trailing /file.txt",
+            "Project Files/CON/file.txt",
+        )) {
             assertFalse(Paths.isSafePath(path), "$path should be refused")
+            assertNotNull(Paths.pathProblem(path), "$path should report a problem")
         }
     }
 
     Suite.test("a listing path is accepted and round trips") {
-        for (path in listOf("", "a.txt", "cad/parts", "cad/parts/gripper.step")) {
+        for (path in listOf(
+            "", "a.txt", "cad/parts", "cad/parts/gripper.step",
+            "My Documents", "Vacation Photos", "test file.pdf", "base plate.dwg",
+            "Project Files/test file.pdf", "My Documents/Vacation Photos/photo 1.jpg",
+        )) {
             assertTrue(Paths.isSafePath(path), "$path should be allowed")
+            assertNull(Paths.pathProblem(path), "$path should have no problem")
         }
         assertEquals("cad/parts/a.txt", Paths.join("cad/parts", "a.txt"))
         assertEquals("a.txt", Paths.join("", "a.txt"))
