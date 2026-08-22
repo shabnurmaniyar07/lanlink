@@ -2,10 +2,10 @@
 
 
 a = Analysis(
-    ['src/lanlink/desktop.py'],
+    ['run_app.py'],
     pathex=['src'],
     binaries=[],
-    datas=[],
+    datas=[('packaging/lanlink.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,4 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['packaging/lanlink.ico'],
 )
