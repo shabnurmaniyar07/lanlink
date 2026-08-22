@@ -6,6 +6,8 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,7 +23,14 @@ import link.lan.app.Sorting
 import link.lan.app.Standing
 import link.lan.app.failureOf
 import link.lan.core.Entry
+import link.lan.core.Pinning
 import link.lan.core.Share
+import org.json.JSONObject
+import java.net.Inet4Address
+import java.net.NetworkInterface
+import java.net.URL
+import javax.net.ssl.HostnameVerifier
+import javax.net.ssl.HttpsURLConnection
 
 /**
  * One device: connecting to it, and looking around inside it.
@@ -57,13 +66,77 @@ class DeviceViewModel(application: Application) : AndroidViewModel(application) 
 
     private var session: Session? = null
 
+    private suspend fun scanSubnetForDevice(device: KnownDevice): KnownDevice? = withContext(Dispatchers.IO) {
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()?.toList() ?: return@withContext null
+            val localIps = interfaces.flatMap { it.inetAddresses.toList() }
+                .filterIsInstance<Inet4Address>()
+                .filter { !it.isLoopbackAddress && !it.isLinkLocalAddress }
+
+            for (localIp in localIps) {
+                val parts = localIp.hostAddress?.split(".") ?: continue
+                if (parts.size != 4) continue
+                val prefix = "${parts[0]}.${parts[1]}.${parts[2]}"
+
+                val deferreds = (1..254).map { i ->
+                    async {
+                        val candidateIp = "$prefix.$i"
+                        if (candidateIp == device.host) return@async null
+                        try {
+                            val url = URL("https://$candidateIp:${device.port}/v1/device")
+                            val conn = url.openConnection() as HttpsURLConnection
+                            if (device.certificatePem.isNotBlank()) {
+                                conn.sslSocketFactory = Pinning.socketFactoryForPem(device.certificatePem)
+                            }
+                            conn.hostnameVerifier = HostnameVerifier { _, _ -> true }
+                            conn.connectTimeout = 350
+                            conn.readTimeout = 350
+                            if (conn.responseCode == 200) {
+                                val body = conn.inputStream.bufferedReader().readText()
+                                val json = JSONObject(body)
+                                val devObj = json.optJSONObject("device") ?: json
+                                val foundId = devObj.optString("id")
+                                val foundName = devObj.optString("name").ifEmpty { device.name }
+                                if (foundId == device.id) {
+                                    return@async device.seenAt(candidateIp, device.port, System.currentTimeMillis()).renamedTo(foundName)
+                                }
+                            }
+                            conn.disconnect()
+                        } catch (_: Exception) {}
+                        null
+                    }
+                }
+                val found = deferreds.awaitAll().firstOrNull { it != null }
+                if (found != null) return@withContext found
+            }
+        } catch (_: Exception) {}
+        null
+    }
+
     /** Open a device: connect, verify, authenticate, then list its shares. */
     fun open(device: KnownDevice) {
-        _state.value = DeviceUiState(device = device, connecting = true, message = "Connecting…")
+        val latestDevice = store.load().find(device.id) ?: device
+        _state.value = DeviceUiState(device = latestDevice, connecting = true, message = "Connecting…")
         viewModelScope.launch {
-            val opened = withContext(Dispatchers.IO) { Session.open(device) }
+            var activeDev = latestDevice
+            var opened = withContext(Dispatchers.IO) { Session.open(activeDev) }
+
+            // If connection failed (IP changed), sweep local subnet to auto-recover IP
+            if (opened.standing != Standing.CONNECTED && opened.standing != Standing.IMPOSTOR) {
+                _state.value = _state.value.copy(message = "Searching network for updated IP…")
+                val relocated = scanSubnetForDevice(activeDev)
+                if (relocated != null) {
+                    val storeData = store.load()
+                    storeData.seen(relocated.id, relocated.host, relocated.port, System.currentTimeMillis(), relocated.name)
+                    store.save(storeData)
+                    activeDev = relocated
+                    opened = withContext(Dispatchers.IO) { Session.open(activeDev) }
+                }
+            }
+
             session = opened
             _state.value = _state.value.copy(
+                device = activeDev,
                 standing = opened.standing,
                 message = opened.connection.message,
                 connecting = false,
@@ -71,9 +144,7 @@ class DeviceViewModel(application: Application) : AndroidViewModel(application) 
                 browse = BrowseState(),
             )
             if (opened.standing != Standing.CONNECTED) {
-                // Anything queued for a device we cannot reach is not going to
-                // happen; failing it now beats a queue that quietly stalls.
-                TransferCentre.deviceLost(device.id)
+                TransferCentre.deviceLost(activeDev.id)
             }
         }
     }

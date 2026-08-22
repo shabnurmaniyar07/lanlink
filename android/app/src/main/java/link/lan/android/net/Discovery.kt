@@ -6,13 +6,21 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import link.lan.app.SeenDevice
 import link.lan.core.DEFAULT_PORT
 import link.lan.core.SERVICE_TYPE
+import org.json.JSONObject
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.Inet4Address
+import java.net.SocketTimeoutException
 
 /**
  * LanLink devices on this Wi-Fi, via NsdManager.
@@ -95,6 +103,47 @@ class Discovery(context: Context) {
             }
         }
 
+        val beaconJob = launch(Dispatchers.IO) {
+            try {
+                DatagramSocket(8766).use { socket ->
+                    socket.broadcast = true
+                    socket.soTimeout = 2000
+                    val buf = ByteArray(2048)
+                    while (isActive) {
+                        try {
+                            val packet = DatagramPacket(buf, buf.size)
+                            socket.receive(packet)
+                            val str = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
+                            val json = org.json.JSONObject(str)
+                            if (json.optString("magic") == "LANLINK_BEACON_V1") {
+                                val devId = json.optString("id")
+                                val name = json.optString("name").ifEmpty { "LanLink device" }
+                                val port = json.optInt("port", DEFAULT_PORT)
+                                val fp = json.optString("fp").lowercase()
+                                val host = packet.address.hostAddress ?: continue
+                                if (devId.isNotEmpty()) {
+                                    Log.i(TAG, "beacon discovered: name=$name address=$host:$port id=$devId")
+                                    found[devId] = SeenDevice(
+                                        id = devId,
+                                        name = name,
+                                        host = host,
+                                        port = port,
+                                        fingerprint = fp
+                                    )
+                                    publish()
+                                }
+                            }
+                        } catch (_: java.net.SocketTimeoutException) {
+                        } catch (_: Exception) {
+                            kotlinx.coroutines.delay(500)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "UDP Beacon listener socket error: ${e.message}")
+            }
+        }
+
         try {
             nsd.discoverServices(SERVICE_TYPE_NSD, NsdManager.PROTOCOL_DNS_SD, listener)
         } catch (error: Exception) {
@@ -103,6 +152,7 @@ class Discovery(context: Context) {
         }
 
         awaitClose {
+            beaconJob.cancel()
             runCatching { nsd.stopServiceDiscovery(listener) }
         }
     }
