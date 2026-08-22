@@ -36,7 +36,7 @@ import java.net.SocketTimeoutException
  * small as it can be for exactly that reason: it turns callbacks into a Flow of
  * [SeenDevice] and does no thinking of its own.
  */
-class Discovery(context: Context) {
+class Discovery(private val context: Context) {
 
     private val nsd = context.getSystemService(Context.NSD_SERVICE) as NsdManager
 
@@ -121,7 +121,8 @@ class Discovery(context: Context) {
                                 val port = json.optInt("port", DEFAULT_PORT)
                                 val fp = json.optString("fp").lowercase()
                                 val host = packet.address.hostAddress ?: continue
-                                if (devId.isNotEmpty()) {
+                                val myId = link.lan.android.data.SecureStore.open(context).clientId()
+                                if (devId.isNotEmpty() && devId != myId) {
                                     Log.i(TAG, "beacon discovered: name=$name address=$host:$port id=$devId")
                                     found[devId] = SeenDevice(
                                         id = devId,
