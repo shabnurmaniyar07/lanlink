@@ -1,4 +1,4 @@
-﻿package link.lan.android.server
+package link.lan.android.server
 
 import android.content.Context
 import android.net.nsd.NsdManager
@@ -47,7 +47,7 @@ class ServerAdvertiser(private val context: Context) {
             setAttribute("name", deviceName)
             setAttribute("api", "v1")
             setAttribute("platform", "Android")
-            setAttribute("version", "0.1.2")
+            setAttribute("version", "0.2.0")
             setAttribute("scheme", "https")
             setAttribute("fp", fingerprint.replace(":", "").take(32).lowercase())
         }

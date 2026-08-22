@@ -1,4 +1,4 @@
-﻿package link.lan.android.ui
+package link.lan.android.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -220,7 +220,7 @@ fun SettingsScreen(
                     HorizontalDivider()
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        text = "Device ID: $clientId\nPaired Devices: $pairedCount\nHardware TLS Certificate Pinning: Enforced",
+                        text = "LanLink v${link.lan.android.BuildConfig.VERSION_NAME}\nDevice ID: $clientId\nPaired Devices: $pairedCount\nHardware TLS Certificate Pinning: Enforced",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

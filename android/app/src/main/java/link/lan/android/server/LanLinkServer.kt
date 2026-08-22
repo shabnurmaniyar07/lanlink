@@ -154,7 +154,7 @@ class LanLinkServer(
                 }
                 path == "/v1/device" && method == "GET" -> {
                     val devName = deviceNameProvider()
-                    val body = """{"id":"$deviceId","name":${Json.quote(devName)},"platform":"Android","version":"0.1.2","api":"v1","fingerprint":"${identity.fingerprint}","scheme":"https","device":{"id":"$deviceId","name":${Json.quote(devName)},"platform":"Android","version":"0.1.2","api":"v1"}}"""
+                    val body = """{"id":"$deviceId","name":${Json.quote(devName)},"platform":"Android","version":"0.2.0","api":"v1","fingerprint":"${identity.fingerprint}","scheme":"https","device":{"id":"$deviceId","name":${Json.quote(devName)},"platform":"Android","version":"0.2.0","api":"v1"}}"""
                     sendJson(output, 200, body)
                 }
                 path == "/v1/pair" && method == "POST" -> {
@@ -292,7 +292,7 @@ class LanLinkServer(
         savePairedClients()
 
         val devName = deviceNameProvider()
-        val resp = """{"token":"$token","device":{"id":"$deviceId","name":${Json.quote(devName)},"platform":"Android","version":"0.1.2","api":"v1"},"device_id":"$deviceId","device_name":${Json.quote(devName)},"api":"v1"}"""
+        val resp = """{"token":"$token","device":{"id":"$deviceId","name":${Json.quote(devName)},"platform":"Android","version":"0.2.0","api":"v1"},"device_id":"$deviceId","device_name":${Json.quote(devName)},"api":"v1"}"""
         sendJson(output, 200, resp)
     }
 
