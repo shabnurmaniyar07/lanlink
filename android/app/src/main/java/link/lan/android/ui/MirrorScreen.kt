@@ -1,9 +1,12 @@
 package link.lan.android.ui
 
 import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -75,6 +78,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -88,15 +94,21 @@ import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
 import kotlin.math.roundToInt
 
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
 enum class MouseInputMode {
     TRACKPAD, // Relative movement (Cursor continues where left off - default)
     DIRECT_TOUCH // Absolute coordinate jump (Stylus/Direct tap)
 }
 
 enum class ScreenOrientationOption(val label: String, val orientation: Int) {
-    AUTO("Auto Rotate", ActivityInfo.SCREEN_ORIENTATION_SENSOR),
     LANDSCAPE("Landscape", ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE),
-    PORTRAIT("Portrait", ActivityInfo.SCREEN_ORIENTATION_PORTRAIT)
+    PORTRAIT("Portrait", ActivityInfo.SCREEN_ORIENTATION_PORTRAIT),
+    AUTO("Auto-Sensor", ActivityInfo.SCREEN_ORIENTATION_SENSOR)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -108,7 +120,6 @@ fun MirrorScreen(
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
-    val activity = context as? Activity
     val scope = rememberCoroutineScope()
 
     var activeDevice by remember(currentDevice) { mutableStateOf(currentDevice) }
@@ -131,15 +142,39 @@ fun MirrorScreen(
 
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
 
-    // Manage activity screen orientation
+    // Handle Android back press in fullscreen
+    BackHandler(enabled = isFullscreen) {
+        isFullscreen = false
+    }
+
+    // Apply orientation change directly on Activity
     LaunchedEffect(orientationMode) {
+        val activity = context.findActivity()
         activity?.requestedOrientation = orientationMode.orientation
     }
 
-    // Reset orientation on back
+    // Apply system status bar & navigation bar hiding for True Fullscreen
+    LaunchedEffect(isFullscreen) {
+        val activity = context.findActivity() ?: return@LaunchedEffect
+        val window = activity.window ?: return@LaunchedEffect
+        val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+        if (isFullscreen) {
+            insetsController.hide(WindowInsetsCompat.Type.systemBars())
+            insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        } else {
+            insetsController.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    // Reset orientation & system bars when leaving screen
     DisposableEffect(Unit) {
         onDispose {
+            val activity = context.findActivity()
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            activity?.window?.let { win ->
+                val insetsController = WindowCompat.getInsetsController(win, win.decorView)
+                insetsController.show(WindowInsetsCompat.Type.systemBars())
+            }
         }
     }
 
@@ -303,7 +338,7 @@ fun MirrorScreen(
                         }
                     },
                     actions = {
-                        // Rotation toggle
+                        // Rotation toggle button
                         IconButton(
                             onClick = {
                                 orientationMode = when (orientationMode) {
@@ -314,6 +349,10 @@ fun MirrorScreen(
                             }
                         ) {
                             Icon(Icons.Filled.ScreenRotation, contentDescription = "Rotate Screen (${orientationMode.label})")
+                        }
+                        // Rotate Canvas 90deg button
+                        IconButton(onClick = { rotationAngle = (rotationAngle + 90) % 360 }) {
+                            Icon(Icons.Filled.Rotate90DegreesCw, contentDescription = "Rotate Canvas")
                         }
                         // Fullscreen button
                         IconButton(onClick = { isFullscreen = true }) {
@@ -344,7 +383,7 @@ fun MirrorScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 4.dp, vertical = 4.dp),
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
