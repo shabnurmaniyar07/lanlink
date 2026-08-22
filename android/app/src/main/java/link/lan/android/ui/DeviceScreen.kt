@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -49,6 +51,8 @@ fun DeviceScreen(
     onUpload: () -> Unit,
     onInformation: () -> Unit,
     onTrackpad: () -> Unit = {},
+    onScreenMirror: () -> Unit = {},
+    onBackupCamera: () -> Unit = {},
     onRetry: () -> Unit,
     onTransfers: () -> Unit,
 ) {
@@ -127,6 +131,28 @@ fun DeviceScreen(
                 Icon(Icons.Filled.Mouse, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Virtual Trackpad & Remote")
+            }
+
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = onScreenMirror,
+                enabled = state.connected,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Filled.Cast, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Mirror Laptop Screen")
+            }
+
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = onBackupCamera,
+                enabled = state.connected,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Filled.Backup, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Backup Photos & Videos to Laptop")
             }
 
             Spacer(Modifier.height(10.dp))

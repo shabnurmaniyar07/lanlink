@@ -95,7 +95,10 @@ DOCUMENTED_ROUTES = {
     ("GET", "/v1/clipboard"),
     ("POST", "/v1/clipboard"),
     ("POST", "/v1/remote/mouse"),
+    ("POST", "/v1/remote/keyboard"),
     ("POST", "/v1/remote/media"),
+    ("GET", "/v1/screen/frame"),
+    ("POST", "/v1/backup/camera"),
 }
 
 

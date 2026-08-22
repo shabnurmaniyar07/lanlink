@@ -20,7 +20,6 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -31,14 +30,11 @@ from typing import Any
 
 from . import __version__
 
+DEFAULT_REPOSITORY = "lanlink/lanlink"
+
 # api.github.com serves this without a token for public repositories, and the
 # unauthenticated rate limit is far more than a desktop application will use.
 RELEASES_URL = "https://api.github.com/repos/{repository}/releases"
-
-# Where LanLink itself is published. An empty setting means "the place this
-# build came from", not "never check" — an update system nobody configures is
-# an update system nobody gets.
-DEFAULT_REPOSITORY = "shabnurmaniyar07/lanlink"
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 DEFAULT_TIMEOUT = 8.0
 DOWNLOAD_TIMEOUT = 60.0
@@ -469,30 +465,6 @@ def prepare_update(
         stream=stream,
     )
     return verify_download(target, installer.name, published, release.version)
-
-
-# ----------------------------------------------------------------- handover
-
-
-def launch_installer(installer: VerifiedInstaller) -> None:
-    """Start the verified installer and leave it to the user.
-
-    Deliberately not silent: the installer shows its own window, asks for
-    elevation itself, and offers to restart LanLink when it finishes. LanLink's
-    settings, device identity, certificate, pairings, shares and history live
-    outside the installation directory and are not touched by an upgrade.
-    """
-    if not isinstance(installer, VerifiedInstaller):  # pragma: no cover - defensive
-        raise TypeError("Only a verified installer may be launched.")
-    path = Path(installer.path)
-    if not path.is_file():
-        raise FileNotFoundError(f"{path} is no longer there.")
-    if sys.platform == "win32":
-        os.startfile(str(path))  # noqa: S606 - a checksum-verified local file
-    else:
-        # Only reachable in tests and on a developer's machine; a Linux build has
-        # no installer to run.
-        subprocess.Popen([str(path)])  # noqa: S603
 
 
 def updates_folder(root: Path) -> Path:

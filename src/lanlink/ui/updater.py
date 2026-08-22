@@ -26,6 +26,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+import os
+import subprocess
+import sys
+from collections.abc import Callable
 
 from ..updates import (
     ChecksumMismatch,
@@ -33,9 +37,21 @@ from ..updates import (
     UpdateCancelled,
     UpdateCheck,
     VerifiedInstaller,
-    launch_installer,
     prepare_update,
 )
+
+
+def launch_installer(installer: VerifiedInstaller) -> None:
+    """Start the verified installer and leave it to the user."""
+    if not isinstance(installer, VerifiedInstaller):
+        raise TypeError("Only a verified installer may be launched.")
+    path = Path(installer.path)
+    if not path.is_file():
+        raise FileNotFoundError(f"{path} is no longer there.")
+    if sys.platform == "win32":
+        os.startfile(str(path))
+    else:
+        subprocess.Popen([str(path)])
 
 
 def format_size(size: int | None) -> str:

@@ -138,7 +138,10 @@ def window(qapp, tmp_path, monkeypatch):
     # The timers would fire network probes during the test run.
     instance.fast_timer.stop()
     instance.slow_timer.stop()
+    if getattr(instance, "startup_timer", None) is not None:
+        instance.startup_timer.stop()
     yield instance
+    instance.close()
     instance.transfers.shutdown()
     instance.runner.wait(2000)
     instance.deleteLater()

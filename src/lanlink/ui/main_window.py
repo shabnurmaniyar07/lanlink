@@ -76,13 +76,27 @@ from .jobs import JobRunner
 from .pairing import PairingApproval
 from .qrcode import QrLabel
 from .theme import (
+    allow_camera_backup,
+    allow_clipboard_sync,
+    allow_remote_keyboard,
+    allow_remote_media,
+    allow_remote_mouse,
+    allow_screen_mirror,
     apply_theme,
     checks_updates_at_startup,
+    save_allow_camera_backup,
+    save_allow_clipboard_sync,
+    save_allow_remote_keyboard,
+    save_allow_remote_media,
+    save_allow_remote_mouse,
+    save_allow_screen_mirror,
+    save_camera_backup_path,
     save_check_at_startup,
     save_last_check,
     save_skipped_version,
     save_theme,
     save_update_repository,
+    saved_camera_backup_path,
     saved_last_check,
     saved_last_version,
     saved_skipped_version,
@@ -395,11 +409,6 @@ class MainWindow(QMainWindow):
         self._update_link = ""
         self._update_check: UpdateCheck | None = None
         self._installing = False
-        if self._startup_check_is_due():
-            # Quietly, and at most once a day: a version check must never be the
-            # first thing a person is asked about when they open the application,
-            # and ten launches before lunch is not ten requests to GitHub.
-            QTimer.singleShot(2500, lambda: self.check_for_updates(quiet=True))
 
     # ------------------------------------------------------------------ layout
 
@@ -852,6 +861,44 @@ class MainWindow(QMainWindow):
         cache_note.setObjectName("muted")
         layout.addWidget(cache_note)
 
+        layout.addWidget(self._heading("Remote Features & Permissions"))
+        remote_form = QFormLayout()
+
+        self.remote_mouse_box = QCheckBox("Allow paired devices to control the mouse pointer")
+        self.remote_mouse_box.setChecked(allow_remote_mouse())
+        remote_form.addRow("Virtual Mouse:", self.remote_mouse_box)
+
+        self.remote_keyboard_box = QCheckBox("Allow paired devices to send keyboard typing & hotkeys")
+        self.remote_keyboard_box.setChecked(allow_remote_keyboard())
+        remote_form.addRow("Remote Keyboard:", self.remote_keyboard_box)
+
+        self.remote_media_box = QCheckBox("Allow paired devices to trigger media playback & volume keys")
+        self.remote_media_box.setChecked(allow_remote_media())
+        remote_form.addRow("Media Controls:", self.remote_media_box)
+
+        self.remote_screen_box = QCheckBox("Allow live screen mirroring to paired phones")
+        self.remote_screen_box.setChecked(allow_screen_mirror())
+        remote_form.addRow("Screen Mirroring:", self.remote_screen_box)
+
+        self.remote_clipboard_box = QCheckBox("Synchronize clipboard text seamlessly between paired devices")
+        self.remote_clipboard_box.setChecked(allow_clipboard_sync())
+        remote_form.addRow("Clipboard Sync:", self.remote_clipboard_box)
+
+        self.remote_backup_box = QCheckBox("Auto-accept camera photo & video backups from paired phones")
+        self.remote_backup_box.setChecked(allow_camera_backup())
+        remote_form.addRow("Camera Backup:", self.remote_backup_box)
+
+        backup_dir_row = QHBoxLayout()
+        self.backup_path_edit = QLineEdit(saved_camera_backup_path())
+        self.backup_path_edit.setPlaceholderText("Default: Downloads/LanLink Camera Backup")
+        browse_backup_btn = QPushButton("Browse…")
+        browse_backup_btn.clicked.connect(self._choose_camera_backup_path)
+        backup_dir_row.addWidget(self.backup_path_edit)
+        backup_dir_row.addWidget(browse_backup_btn)
+        remote_form.addRow("Backup Folder:", backup_dir_row)
+
+        layout.addLayout(remote_form)
+
         layout.addWidget(self._heading("Updates"))
         update_form = QFormLayout()
         self.update_repo = QLineEdit(saved_update_repository())
@@ -925,6 +972,14 @@ class MainWindow(QMainWindow):
         self.slow_timer = QTimer(self)
         self.slow_timer.timeout.connect(self._tick_slow)
         self.slow_timer.start(3000)
+
+        if self._startup_check_is_due():
+            self.startup_timer = QTimer(self)
+            self.startup_timer.setSingleShot(True)
+            self.startup_timer.timeout.connect(lambda: self.check_for_updates(quiet=True))
+            self.startup_timer.start(2500)
+        else:
+            self.startup_timer = None
 
     def _tick_fast(self) -> None:
         self.refresh_pairing_panel()
@@ -2267,6 +2322,12 @@ class MainWindow(QMainWindow):
         but must not open a dialog. Somebody who opened LanLink to move a file
         does not want a modal about versions.
         """
+        if getattr(self, "startup_timer", None) is not None:
+            self.startup_timer.stop()
+        if getattr(self, "_checking_updates", False):
+            return
+        self._checking_updates = True
+        save_last_check(timestamp())
         save_update_repository(self.update_repo.text())
         # Emptying the field means "the repository LanLink ships from", not
         # "never check": saved_update_repository supplies the default.
@@ -2283,6 +2344,7 @@ class MainWindow(QMainWindow):
             return check_for_update(repository, __version__)
 
         def ready(result: object) -> None:
+            self._checking_updates = False
             self.update_button.setEnabled(True)
             check = result if isinstance(result, UpdateCheck) else None
             if check is None:
@@ -2291,6 +2353,7 @@ class MainWindow(QMainWindow):
             self._apply_update_check(check, quiet=quiet)
 
         def failed(message: str) -> None:
+            self._checking_updates = False
             self.update_button.setEnabled(True)
             self.update_status.setText(f"The update check failed: {message}")
 
@@ -2387,6 +2450,13 @@ class MainWindow(QMainWindow):
         painted = apply_theme(QApplication.instance(), save_theme(mode))
         self.status_line.showMessage(f"Theme: {self.theme_combo.itemText(index)} ({painted})", 4000)
 
+    def _choose_camera_backup_path(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Select Camera Backup Directory", self.backup_path_edit.text()
+        )
+        if chosen:
+            self.backup_path_edit.setText(chosen)
+
     def save_settings(self) -> None:
         self.state.set_device_name(self.setting_name.text())
         self.state.max_upload_bytes = self.setting_limit.value() * 1024 * 1024
@@ -2396,6 +2466,13 @@ class MainWindow(QMainWindow):
         self.state._save()
         save_update_repository(self.update_repo.text())
         save_check_at_startup(self.update_startup.isChecked())
+        save_allow_remote_mouse(self.remote_mouse_box.isChecked())
+        save_allow_remote_keyboard(self.remote_keyboard_box.isChecked())
+        save_allow_remote_media(self.remote_media_box.isChecked())
+        save_allow_screen_mirror(self.remote_screen_box.isChecked())
+        save_allow_clipboard_sync(self.remote_clipboard_box.isChecked())
+        save_allow_camera_backup(self.remote_backup_box.isChecked())
+        save_camera_backup_path(self.backup_path_edit.text().strip())
         if tls_changed:
             QMessageBox.information(
                 self,
@@ -2422,6 +2499,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
 
+        if getattr(self, "startup_timer", None) is not None:
+            self.startup_timer.stop()
         self.fast_timer.stop()
         self.slow_timer.stop()
         self.transfers.shutdown()

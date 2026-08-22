@@ -15,8 +15,6 @@ from PySide6.QtCore import QSettings
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QApplication
 
-from ..updates import DEFAULT_REPOSITORY
-
 ORGANISATION = "LanLink"
 APPLICATION = "LanLink"
 SETTINGS_KEY = "appearance/theme"
@@ -24,7 +22,15 @@ UPDATE_REPOSITORY_KEY = "updates/repository"
 UPDATE_AT_STARTUP_KEY = "updates/check_at_startup"
 UPDATE_LAST_CHECK_KEY = "updates/last_check"
 UPDATE_LAST_VERSION_KEY = "updates/last_version"
-UPDATE_SKIPPED_KEY = "updates/skipped_version"
+UPDATE_SKIPPED_VERSION_KEY = "updates/skipped_version"
+
+ALLOW_MOUSE_KEY = "remote/allow_mouse"
+ALLOW_KEYBOARD_KEY = "remote/allow_keyboard"
+ALLOW_MEDIA_KEY = "remote/allow_media"
+ALLOW_SCREEN_KEY = "remote/allow_screen"
+ALLOW_CLIPBOARD_KEY = "remote/allow_clipboard"
+ALLOW_BACKUP_KEY = "remote/allow_backup"
+BACKUP_PATH_KEY = "remote/backup_path"
 
 SYSTEM = "system"
 LIGHT = "light"
@@ -286,13 +292,10 @@ def _scheme_name(app: QApplication) -> str:
 
 
 def saved_update_repository() -> str:
-    """The repository to check, falling back to the one LanLink ships from.
-
-    Someone who never opens Settings still gets update checks; someone who
-    points LanLink at their own fork still overrides it.
-    """
-    stored = str(settings().value(UPDATE_REPOSITORY_KEY, "") or "").strip()
-    return stored or DEFAULT_REPOSITORY
+    from ..updates import DEFAULT_REPOSITORY
+    value = settings().value(UPDATE_REPOSITORY_KEY, "")
+    val_str = str(value or "").strip()
+    return val_str if val_str else DEFAULT_REPOSITORY
 
 
 def save_update_repository(repository: str) -> str:
@@ -304,7 +307,6 @@ def save_update_repository(repository: str) -> str:
 
 
 def checks_updates_at_startup() -> bool:
-    """On unless it was turned off. A security fix nobody hears about is not one."""
     value = settings().value(UPDATE_AT_STARTUP_KEY, True)
     return str(value).strip().lower() in {"true", "1", "yes"}
 
@@ -317,32 +319,100 @@ def save_check_at_startup(enabled: bool) -> bool:
 
 
 def saved_last_check() -> str:
-    """When the last successful check finished, so automatic checking can be daily."""
-    return str(settings().value(UPDATE_LAST_CHECK_KEY, "") or "")
+    return str(settings().value(UPDATE_LAST_CHECK_KEY, "") or "").strip()
 
 
 def saved_last_version() -> str:
-    """The newest version the last successful check saw."""
-    return str(settings().value(UPDATE_LAST_VERSION_KEY, "") or "")
+    return str(settings().value(UPDATE_LAST_VERSION_KEY, "") or "").strip()
 
 
-def save_last_check(timestamp: str, latest_version: str) -> None:
+def save_last_check(timestamp: str, version: str = "") -> None:
     store = settings()
-    store.setValue(UPDATE_LAST_CHECK_KEY, timestamp)
-    store.setValue(UPDATE_LAST_VERSION_KEY, latest_version)
+    store.setValue(UPDATE_LAST_CHECK_KEY, str(timestamp).strip())
+    if version:
+        store.setValue(UPDATE_LAST_VERSION_KEY, str(version).strip())
     store.sync()
 
 
 def saved_skipped_version() -> str:
-    return str(settings().value(UPDATE_SKIPPED_KEY, "") or "")
+    return str(settings().value(UPDATE_SKIPPED_VERSION_KEY, "") or "").strip()
 
 
-def save_skipped_version(version: str) -> str:
-    cleaned = (version or "").strip()
+def save_skipped_version(version: str) -> None:
     store = settings()
-    store.setValue(UPDATE_SKIPPED_KEY, cleaned)
+    store.setValue(UPDATE_SKIPPED_VERSION_KEY, str(version).strip())
     store.sync()
-    return cleaned
+
+
+def _get_bool(key: str, default: bool = True) -> bool:
+    value = settings().value(key, default)
+    return str(value).strip().lower() in {"true", "1", "yes"}
+
+
+def _set_bool(key: str, enabled: bool) -> bool:
+    store = settings()
+    store.setValue(key, bool(enabled))
+    store.sync()
+    return bool(enabled)
+
+
+def allow_remote_mouse() -> bool:
+    return _get_bool(ALLOW_MOUSE_KEY, True)
+
+
+def save_allow_remote_mouse(enabled: bool) -> bool:
+    return _set_bool(ALLOW_MOUSE_KEY, enabled)
+
+
+def allow_remote_keyboard() -> bool:
+    return _get_bool(ALLOW_KEYBOARD_KEY, True)
+
+
+def save_allow_remote_keyboard(enabled: bool) -> bool:
+    return _set_bool(ALLOW_KEYBOARD_KEY, enabled)
+
+
+def allow_remote_media() -> bool:
+    return _get_bool(ALLOW_MEDIA_KEY, True)
+
+
+def save_allow_remote_media(enabled: bool) -> bool:
+    return _set_bool(ALLOW_MEDIA_KEY, enabled)
+
+
+def allow_screen_mirror() -> bool:
+    return _get_bool(ALLOW_SCREEN_KEY, True)
+
+
+def save_allow_screen_mirror(enabled: bool) -> bool:
+    return _set_bool(ALLOW_SCREEN_KEY, enabled)
+
+
+def allow_clipboard_sync() -> bool:
+    return _get_bool(ALLOW_CLIPBOARD_KEY, True)
+
+
+def save_allow_clipboard_sync(enabled: bool) -> bool:
+    return _set_bool(ALLOW_CLIPBOARD_KEY, enabled)
+
+
+def allow_camera_backup() -> bool:
+    return _get_bool(ALLOW_BACKUP_KEY, True)
+
+
+def save_allow_camera_backup(enabled: bool) -> bool:
+    return _set_bool(ALLOW_BACKUP_KEY, enabled)
+
+
+def saved_camera_backup_path() -> str:
+    return str(settings().value(BACKUP_PATH_KEY, "") or "").strip()
+
+
+def save_camera_backup_path(path: str) -> str:
+    store = settings()
+    store.setValue(BACKUP_PATH_KEY, str(path).strip())
+    store.sync()
+    return str(path).strip()
 
 
 def detect_system_theme(app: object | None = None) -> str:
@@ -418,11 +488,7 @@ def palette_for(theme: str) -> QPalette:
 
 
 def apply_theme(app: object | None, mode: object) -> str:
-    """Install the sheet for ``mode`` and return the theme actually painted.
-
-    Still returns the resolved theme when there is no application to paint —
-    the caller asked what the theme is, not only that it was installed.
-    """
+    """Install the sheet for ``mode`` and return the theme actually painted."""
     application = _application(app)
     theme = resolve(mode, application)
     if application is not None:

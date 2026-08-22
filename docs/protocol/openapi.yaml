@@ -152,6 +152,34 @@ paths:
                 type: object
           description: Successful Response
       summary: Health
+  /v1/backup/camera:
+    post:
+      operationId: backup_camera_v1_backup_camera_post
+      parameters:
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Backup Camera V1 Backup Camera Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Backup Camera
   /v1/clipboard:
     get:
       operationId: get_clipboard_v1_clipboard_get
@@ -437,6 +465,34 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
           description: Validation Error
       summary: Revoke Pairing
+  /v1/remote/keyboard:
+    post:
+      operationId: remote_keyboard_v1_remote_keyboard_post
+      parameters:
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                title: Response Remote Keyboard V1 Remote Keyboard Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Remote Keyboard
   /v1/remote/media:
     post:
       operationId: remote_media_v1_remote_media_post
@@ -493,6 +549,45 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
           description: Validation Error
       summary: Remote Mouse
+  /v1/screen/frame:
+    get:
+      operationId: screen_frame_v1_screen_frame_get
+      parameters:
+      - in: query
+        name: quality
+        required: false
+        schema:
+          default: 55
+          title: Quality
+          type: integer
+      - in: query
+        name: width
+        required: false
+        schema:
+          default: 1280
+          title: Width
+          type: integer
+      - in: header
+        name: x-lanlink-token
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Lanlink-Token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: {}
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Screen Frame
   /v1/shares:
     get:
       operationId: shares_v1_shares_get

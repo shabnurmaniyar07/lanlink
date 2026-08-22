@@ -31,6 +31,8 @@ import link.lan.android.ui.DeviceInfoScreen
 import link.lan.android.ui.DeviceScreen
 import link.lan.android.ui.DevicesScreen
 import link.lan.android.ui.LanLinkTheme
+import link.lan.android.service.CameraBackupCentre
+import link.lan.android.ui.MirrorScreen
 import link.lan.android.ui.MyDeviceScreen
 import link.lan.android.ui.PairingDialog
 import link.lan.android.ui.SettingsScreen
@@ -46,8 +48,8 @@ import link.lan.app.inviteFor
 
 import link.lan.android.server.ServerCentre
 
-/** Where the app is. Local state rather than a navigation library: eight screens. */
-private enum class Screen { DEVICES, DEVICE, BROWSE, TRANSFERS, INFORMATION, SETTINGS, MY_DEVICE, TRACKPAD }
+/** Where the app is. Local state rather than a navigation library: nine screens. */
+private enum class Screen { DEVICES, DEVICE, BROWSE, TRANSFERS, INFORMATION, SETTINGS, MY_DEVICE, TRACKPAD, SCREEN_MIRROR }
 
 /**
  * The only Activity.
@@ -132,6 +134,7 @@ class MainActivity : ComponentActivity() {
         pendingInvite = inviteFromIntent(intent)
         handleSendIntent(intent)
         link.lan.android.service.ClipboardSyncCentre.init(this)
+        CameraBackupCentre.init(this)
 
         // Android 13+ will not show the transfer notification without this, and
         // the service is far less useful when it is silent. Asked once, here,
@@ -293,6 +296,14 @@ class MainActivity : ComponentActivity() {
                 onUpload = { screen = Screen.BROWSE },
                 onInformation = { screen = Screen.INFORMATION },
                 onTrackpad = { screen = Screen.TRACKPAD },
+                onScreenMirror = { screen = Screen.SCREEN_MIRROR },
+                onBackupCamera = {
+                    val target = deviceState.device
+                    if (target != null) {
+                        CameraBackupCentre.triggerBackup(this@MainActivity, target)
+                        toast("Camera backup started to ${target.name}")
+                    }
+                },
                 onRetry = device::reconnect,
                 onTransfers = { screen = Screen.TRANSFERS },
             )
@@ -356,15 +367,36 @@ class MainActivity : ComponentActivity() {
                 allowInsecureInvites = devices.allowInsecureInvites,
                 downloadFolder = devices.secureStore().downloadTree?.let(::readableFolder),
                 clipboardSyncEnabled = link.lan.android.service.ClipboardSyncCentre.isEnabled,
+                cameraBackupEnabled = CameraBackupCentre.isAutoBackupEnabled,
                 onAllowInsecureChanged = { devices.allowInsecureInvites = it },
                 onChooseDownloadFolder = { chooseFolder.launch(null) },
                 onToggleClipboardSync = { link.lan.android.service.ClipboardSyncCentre.isEnabled = it },
+                onToggleCameraBackup = {
+                    CameraBackupCentre.isAutoBackupEnabled = it
+                    if (it) {
+                        val active = deviceState.device ?: devices.storedDevices().firstOrNull()
+                        if (active != null) {
+                            CameraBackupCentre.triggerBackup(this@MainActivity, active)
+                            toast("Auto-backup enabled for ${active.name}")
+                        }
+                    }
+                },
                 onOpenTrackpad = { screen = Screen.TRACKPAD },
+                onOpenScreenShare = { screen = Screen.SCREEN_MIRROR },
                 onBack = { screen = Screen.DEVICES },
             )
 
             Screen.TRACKPAD -> TrackpadScreen(
-                device = deviceState.device ?: devices.storedDevices().firstOrNull(),
+                currentDevice = deviceState.device ?: devices.storedDevices().firstOrNull(),
+                allDevices = devices.storedDevices(),
+                onSelectDevice = { device.open(it) },
+                onBack = { screen = if (deviceState.device != null) Screen.DEVICE else Screen.SETTINGS },
+            )
+
+            Screen.SCREEN_MIRROR -> MirrorScreen(
+                currentDevice = deviceState.device ?: devices.storedDevices().firstOrNull(),
+                allDevices = devices.storedDevices(),
+                onSelectDevice = { device.open(it) },
                 onBack = { screen = if (deviceState.device != null) Screen.DEVICE else Screen.SETTINGS },
             )
         }
