@@ -45,10 +45,15 @@ def document() -> dict:
             "self-signed per-device certificate that peers pin at pairing time."
         ),
     }
-    schema["servers"] = [{"url": "https://{host}:{port}", "variables": {
-        "host": {"default": "192.168.1.20", "description": "LAN address from mDNS or an invite"},
-        "port": {"default": "8765", "description": "TCP port from mDNS or an invite"},
-    }}]
+    schema["servers"] = [
+        {
+            "url": "https://{host}:{port}",
+            "variables": {
+                "host": {"default": "192.168.1.20", "description": "LAN address from mDNS or an invite"},
+                "port": {"default": "8765", "description": "TCP port from mDNS or an invite"},
+            },
+        }
+    ]
     return schema
 
 

@@ -161,8 +161,8 @@ def test_the_release_computes_the_checksums_itself() -> None:
 def test_the_release_checks_the_artifacts_before_publishing() -> None:
     """A missing file should fail the build, not produce a release nobody can use."""
     run = commands(load(RELEASE), "windows")
-    assert "test -f \"packaging/output/SHA256SUMS.txt\"" in run
-    assert "grep -q \"LanLinkSetup-$version.exe\" packaging/output/SHA256SUMS.txt" in run
+    assert 'test -f "packaging/output/SHA256SUMS.txt"' in run
+    assert 'grep -q "LanLinkSetup-$version.exe" packaging/output/SHA256SUMS.txt' in run
 
 
 def test_the_artifacts_are_named_after_the_application_version() -> None:

@@ -30,9 +30,7 @@ def test_shares_report_availability_and_permissions(client: TestClient, auth: di
 
 def test_download_round_trip(client: TestClient, state: HubState, auth: dict[str, str]) -> None:
     share_id = next(iter(state.shares))
-    upload = client.post(
-        f"/v1/uploads/{share_id}", headers=auth, files={"file": ("note.txt", b"hello")}
-    )
+    upload = client.post(f"/v1/uploads/{share_id}", headers=auth, files={"file": ("note.txt", b"hello")})
     assert upload.status_code == 200
 
     listing = client.get(f"/v1/shares/{share_id}/list", headers=auth).json()["entries"]

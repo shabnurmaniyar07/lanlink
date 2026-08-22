@@ -105,9 +105,7 @@ def test_upload_honours_the_size_limit(
 ) -> None:
     state.max_upload_bytes = 1024
     share_id = next(iter(state.shares))
-    response = client.post(
-        f"/v1/uploads/{share_id}", headers=auth, files={"file": ("big.bin", b"0" * 4096)}
-    )
+    response = client.post(f"/v1/uploads/{share_id}", headers=auth, files={"file": ("big.bin", b"0" * 4096)})
     assert response.status_code == 413
     assert not (share_root / "big.bin").exists(), "the partial file must be cleaned up"
 
@@ -117,9 +115,7 @@ def test_upload_within_the_limit_succeeds(
 ) -> None:
     state.max_upload_bytes = 1024
     share_id = next(iter(state.shares))
-    response = client.post(
-        f"/v1/uploads/{share_id}", headers=auth, files={"file": ("small.bin", b"0" * 512)}
-    )
+    response = client.post(f"/v1/uploads/{share_id}", headers=auth, files={"file": ("small.bin", b"0" * 512)})
     assert response.status_code == 200
     assert (share_root / "small.bin").stat().st_size == 512
 
@@ -139,9 +135,7 @@ def test_read_only_share_refuses_writes(
     readonly_dir.mkdir()
     share = state.add_share(readonly_dir, "Read only")
     share.permissions = "r"
-    response = client.post(
-        f"/v1/uploads/{share.id}", headers=auth, files={"file": ("a.txt", b"nope")}
-    )
+    response = client.post(f"/v1/uploads/{share.id}", headers=auth, files={"file": ("a.txt", b"nope")})
     assert response.status_code == 403
 
 

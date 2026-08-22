@@ -46,9 +46,7 @@ def qapp():
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     path = tmp_path / "ui.ini"
-    monkeypatch.setattr(
-        theme_module, "settings", lambda: QSettings(str(path), QSettings.Format.IniFormat)
-    )
+    monkeypatch.setattr(theme_module, "settings", lambda: QSettings(str(path), QSettings.Format.IniFormat))
     return path
 
 
@@ -231,9 +229,7 @@ def test_the_installer_only_runs_after_verification(qapp, tmp_path: Path, monkey
         dialog.deleteLater()
 
 
-def test_an_installer_that_will_not_start_says_where_it_is(
-    qapp, tmp_path: Path, monkeypatch
-) -> None:
+def test_an_installer_that_will_not_start_says_where_it_is(qapp, tmp_path: Path, monkeypatch) -> None:
     from lanlink.ui import updater
 
     def explodes(_installer):
@@ -516,7 +512,10 @@ def test_an_upgrade_keeps_the_device_identity_and_its_pairings(tmp_path: Path) -
     share = before.add_share(share_root, "Demo")
     before.set_share_permissions(share.id, ALL_PERMISSIONS)
     before.upsert_remote_device(
-        "peer-1", "Workshop PC", "https://10.0.0.5:8765", "their-token",
+        "peer-1",
+        "Workshop PC",
+        "https://10.0.0.5:8765",
+        "their-token",
         certificate="-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----\n",
         fingerprint="ab" * 32,
     )
@@ -542,9 +541,7 @@ def test_an_upgrade_keeps_the_device_identity_and_its_pairings(tmp_path: Path) -
 
 def test_the_uninstaller_never_touches_the_identity_folder() -> None:
     """The other half of the same promise, enforced in the installer script."""
-    inno = (Path(__file__).resolve().parent.parent / "packaging" / "lanlink.iss").read_text(
-        encoding="utf-8"
-    )
+    inno = (Path(__file__).resolve().parent.parent / "packaging" / "lanlink.iss").read_text(encoding="utf-8")
     deletions = inno.split("[UninstallDelete]", 1)[1].split("[Code]", 1)[0]
     assert "staging" in deletions and "thumbnails" in deletions
     for protected in ("lanlink-hub", "settings.json", "device-key", "device-cert"):

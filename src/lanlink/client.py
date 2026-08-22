@@ -159,9 +159,7 @@ class LanLinkClient:
         response.raise_for_status()
         return response.json()
 
-    def finalize(
-        self, share_id: str, destination_folder: str, name: str, sha256: str | None = None
-    ) -> dict:
+    def finalize(self, share_id: str, destination_folder: str, name: str, sha256: str | None = None) -> dict:
         params: dict[str, str | int | bool] = {"path": destination_folder, "name": name}
         if sha256:
             params["sha256"] = sha256

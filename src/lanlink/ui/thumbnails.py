@@ -68,9 +68,7 @@ class ThumbnailCache:
         if original.isValid():
             if original.width() * original.height() > MAX_SOURCE_PIXELS:
                 return None
-            scaled = original.scaled(
-                QSize(self.size, self.size), Qt.AspectRatioMode.KeepAspectRatio
-            )
+            scaled = original.scaled(QSize(self.size, self.size), Qt.AspectRatioMode.KeepAspectRatio)
             reader.setScaledSize(scaled)
 
         image = reader.read()

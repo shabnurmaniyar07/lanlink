@@ -184,9 +184,7 @@ class RemoteFileStager:
             if sha256:
                 actual = sha256_of(partial)
                 if actual.lower() != sha256.lower():
-                    raise StagingError(
-                        f"{remote.name} failed its SHA-256 check and was discarded."
-                    )
+                    raise StagingError(f"{remote.name} failed its SHA-256 check and was discarded.")
             if remote.size is not None and partial.stat().st_size != remote.size:
                 raise StagingError(f"{remote.name} arrived with an unexpected size.")
             self._restrict(partial)

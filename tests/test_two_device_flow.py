@@ -64,9 +64,7 @@ class Node:
         self.state.device_name = name
         self.share = self.state.add_share(self.share_root, "Shared")
         self.state.set_share_permissions(self.share.id, ALL_PERMISSIONS)
-        self.certificate = ensure_device_certificate(
-            self.home, self.state.device_id, name, ["127.0.0.1"]
-        )
+        self.certificate = ensure_device_certificate(self.home, self.state.device_id, name, ["127.0.0.1"])
         self.state.certificate_fingerprint = self.certificate.fingerprint
         self.port = _free_port()
         self.url = f"https://127.0.0.1:{self.port}"
@@ -594,9 +592,7 @@ def test_13a_killing_the_destination_never_loses_the_file(nodes, manager) -> Non
             assert not landed.exists()
 
         # Either way the file still exists somewhere, whole.
-        survivors = [
-            path for path in (source_file, landed) if path.exists() and path.read_bytes() == payload
-        ]
+        survivors = [path for path in (source_file, landed) if path.exists() and path.read_bytes() == payload]
         assert survivors, "a killed transfer must never lose the file from both machines"
     finally:
         a_client.close()

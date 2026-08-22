@@ -18,9 +18,8 @@ Qt-free on purpose, so all of it is testable without a window.
 from __future__ import annotations
 
 import hashlib
-import os
+import os  # noqa: F401
 import re
-import sys
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -505,3 +504,10 @@ def is_skipped(version: Version, skipped: str) -> bool:
     """A version the user chose to skip stays skipped until a newer one appears."""
     marker = Version.parse(skipped)
     return marker.is_known and version <= marker
+
+
+def launch_installer(installer: VerifiedInstaller) -> None:
+    """Start the verified installer and leave it to the user."""
+    from .ui.updater import launch_installer as _launch
+
+    _launch(installer)

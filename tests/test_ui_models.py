@@ -90,9 +90,7 @@ def test_ip_change_updates_address_without_splitting_identity() -> None:
         [],
     )
     assert len(devices) == 1
-    assert devices[0].address == "https://192.168.1.99:8765", (
-        "the mDNS address must win after a DHCP change"
-    )
+    assert devices[0].address == "https://192.168.1.99:8765", "the mDNS address must win after a DHCP change"
 
 
 def test_paired_only_device_is_offline_without_discovery() -> None:
@@ -291,9 +289,7 @@ def test_summarise() -> None:
     assert text.startswith("2 files transferring")
 
 
-@pytest.mark.parametrize(
-    ("seconds", "expected"), [(None, ""), (5, "5s"), (75, "1m 15s"), (3700, "1h 01m")]
-)
+@pytest.mark.parametrize(("seconds", "expected"), [(None, ""), (5, "5s"), (75, "1m 15s"), (3700, "1h 01m")])
 def test_format_eta(seconds, expected) -> None:
     assert format_eta(seconds) == expected
 
@@ -345,9 +341,7 @@ def test_pairing_approval_round_trip() -> None:
     approval = PairingApproval(timeout=5)
     result: dict[str, bool] = {}
 
-    thread = threading.Thread(
-        target=lambda: result.__setitem__("ok", approval.request("client-1", "Phone"))
-    )
+    thread = threading.Thread(target=lambda: result.__setitem__("ok", approval.request("client-1", "Phone")))
     thread.start()
 
     deadline = time.time() + 5

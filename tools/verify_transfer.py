@@ -62,7 +62,9 @@ def run(manager: TransferManager, transfer, timeout: float = 900.0) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify a real LanLink transfer to another device.")
-    parser.add_argument("--peer", required=True, help="Other device's address, e.g. https://192.168.1.21:8765")
+    parser.add_argument(
+        "--peer", required=True, help="Other device's address, e.g. https://192.168.1.21:8765"
+    )
     parser.add_argument("--code", required=True, help="8-digit pairing code shown on the other device")
     parser.add_argument("--size", type=int, default=64, help="Large-file test size in MB (default 64)")
     parser.add_argument("--name", default="verify-laptop-a", help="Name to pair as")

@@ -168,9 +168,7 @@ def test_pair_response_shape(tmp_path) -> None:
 def test_shares_and_listing_shapes(node) -> None:
     shares = node["client"].get("/v1/shares", headers=node["auth"]).json()
     valid("SharesResponse", shares)
-    listing = node["client"].get(
-        f"/v1/shares/{node['share']}/list", headers=node["auth"]
-    ).json()
+    listing = node["client"].get(f"/v1/shares/{node['share']}/list", headers=node["auth"]).json()
     valid("ListResponse", listing)
     assert [entry["kind"] for entry in listing["entries"]] == ["folder", "file"], "folders sort first"
 
@@ -188,9 +186,7 @@ def test_metadata_shapes(node) -> None:
 
 def test_write_operation_shapes(node) -> None:
     client, auth, share = node["client"], node["auth"], node["share"]
-    uploaded = client.post(
-        f"/v1/uploads/{share}", headers=auth, files={"file": ("up.bin", b"12345")}
-    )
+    uploaded = client.post(f"/v1/uploads/{share}", headers=auth, files={"file": ("up.bin", b"12345")})
     valid("UploadResponse", uploaded.json())
     made = client.post(f"/v1/shares/{share}/folders", json={"path": "", "name": "New"}, headers=auth)
     valid("NamedResult", made.json())
@@ -354,9 +350,7 @@ def test_download_headers_are_what_a_resuming_client_needs(node) -> None:
     assert whole.headers["content-length"] == "5"
     assert 'filename="a.txt"' in whole.headers["content-disposition"]
 
-    part = client.get(
-        f"/v1/files/{share}", params={"path": "a.txt"}, headers={**auth, "Range": "bytes=2-"}
-    )
+    part = client.get(f"/v1/files/{share}", params={"path": "a.txt"}, headers={**auth, "Range": "bytes=2-"})
     assert part.status_code == 206
     assert part.headers["content-range"] == "bytes 2-4/5"
     assert part.headers["content-length"] == "3"
@@ -381,9 +375,7 @@ def test_a_range_the_server_cannot_honour_falls_back_to_the_whole_file(node) -> 
 def test_a_closed_range_returns_exactly_what_was_asked_for(node) -> None:
     client, auth, share = node["client"], node["auth"], node["share"]
 
-    exact = client.get(
-        f"/v1/files/{share}", params={"path": "a.txt"}, headers={**auth, "Range": "bytes=1-3"}
-    )
+    exact = client.get(f"/v1/files/{share}", params={"path": "a.txt"}, headers={**auth, "Range": "bytes=1-3"})
     assert exact.status_code == 206
     assert exact.headers["content-range"] == "bytes 1-3/5"
     assert exact.headers["content-length"] == "3"
@@ -423,6 +415,7 @@ def test_mdns_service_type_and_txt_keys_are_frozen(tmp_path, monkeypatch) -> Non
 
     monkeypatch.setattr(module, "ServiceInfo", FakeInfo)
     monkeypatch.setattr(module, "local_ipv4_addresses", lambda: [b"\x7f\x00\x00\x01"])
+
     def no_multicast():
         raise RuntimeError("tests never join a multicast group")
 
@@ -507,9 +500,7 @@ def test_names_that_are_not_one_safe_leaf_are_refused(node, name: str) -> None:
 
 def test_partial_files_are_never_listed(node) -> None:
     (node["root"] / "ghost.bin.lanlink-part").write_bytes(b"half")
-    entries = node["client"].get(
-        f"/v1/shares/{node['share']}/list", headers=node["auth"]
-    ).json()["entries"]
+    entries = node["client"].get(f"/v1/shares/{node['share']}/list", headers=node["auth"]).json()["entries"]
     assert not [entry for entry in entries if "lanlink-part" in entry["name"]]
 
 

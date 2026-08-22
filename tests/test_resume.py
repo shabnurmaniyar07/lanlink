@@ -152,9 +152,7 @@ def test_range_past_the_end_is_refused(
 
 def test_checksum_endpoint(client: TestClient, state: HubState, auth: dict, share_root: Path) -> None:
     (share_root / "data.bin").write_bytes(b"lanlink" * 100)
-    response = client.get(
-        f"/v1/shares/{share_of(state)}/checksum", params={"path": "data.bin"}, headers=auth
-    )
+    response = client.get(f"/v1/shares/{share_of(state)}/checksum", params={"path": "data.bin"}, headers=auth)
     assert response.status_code == 200
     assert response.json()["sha256"] == sha256_of(share_root / "data.bin")
 
@@ -177,9 +175,7 @@ def test_upload_in_two_parts(client: TestClient, state: HubState, auth: dict, sh
     assert not (share_root / "split.bin").exists(), "an unfinished upload must not appear yet"
     assert (share_root / ("split.bin" + PART_SUFFIX)).stat().st_size == 3000
 
-    status = client.get(
-        f"/v1/shares/{share_id}/partial", headers=auth, params={"name": "split.bin"}
-    ).json()
+    status = client.get(f"/v1/shares/{share_id}/partial", headers=auth, params={"name": "split.bin"}).json()
     assert status == {"received": 3000, "complete": False, "size": None}
 
     second = client.put(
@@ -435,7 +431,9 @@ def test_plain_addresses_still_work(text, host, port, scheme) -> None:
     assert (invite.host, invite.port, invite.scheme) == (host, port, scheme)
 
 
-@pytest.mark.parametrize("text", ["", "   ", "lanlink://open?host=x", "lanlink://pair?port=8765", "http://:9000"])
+@pytest.mark.parametrize(
+    "text", ["", "   ", "lanlink://open?host=x", "lanlink://pair?port=8765", "http://:9000"]
+)
 def test_bad_invites_are_rejected(text) -> None:
     with pytest.raises(InvalidInvite):
         parse_invite(text)

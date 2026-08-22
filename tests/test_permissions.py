@@ -55,15 +55,22 @@ def test_read_only_share_blocks_every_write(
 
     upload = client.post(f"/v1/uploads/{share_id}", headers=auth, files={"file": ("a.txt", b"x")})
     assert upload.status_code == 403
-    assert client.put(
-        f"/v1/files/{share_id}", headers=auth, params={"name": "a.txt"}, content=b"x"
-    ).status_code == 403
-    assert client.post(
-        f"/v1/shares/{share_id}/folders", headers=auth, json={"path": "", "name": "New"}
-    ).status_code == 403
-    assert client.post(
-        f"/v1/shares/{share_id}/rename", headers=auth, json={"path": "existing.txt", "new_name": "b.txt"}
-    ).status_code == 403
+    assert (
+        client.put(f"/v1/files/{share_id}", headers=auth, params={"name": "a.txt"}, content=b"x").status_code
+        == 403
+    )
+    assert (
+        client.post(
+            f"/v1/shares/{share_id}/folders", headers=auth, json={"path": "", "name": "New"}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            f"/v1/shares/{share_id}/rename", headers=auth, json={"path": "existing.txt", "new_name": "b.txt"}
+        ).status_code
+        == 403
+    )
     assert (share_root / "existing.txt").exists()
 
 
@@ -75,12 +82,15 @@ def test_read_only_share_still_allows_reading(
     state.set_share_permissions(share_id, "r")
 
     assert client.get(f"/v1/shares/{share_id}/list", headers=auth).status_code == 200
-    assert client.get(
-        f"/v1/files/{share_id}", headers=auth, params={"path": "readable.txt"}
-    ).content == b"hello"
-    assert client.get(
-        f"/v1/shares/{share_id}/properties", headers=auth, params={"path": "readable.txt"}
-    ).status_code == 200
+    assert (
+        client.get(f"/v1/files/{share_id}", headers=auth, params={"path": "readable.txt"}).content == b"hello"
+    )
+    assert (
+        client.get(
+            f"/v1/shares/{share_id}/properties", headers=auth, params={"path": "readable.txt"}
+        ).status_code
+        == 200
+    )
 
 
 def test_delete_requires_the_delete_flag(

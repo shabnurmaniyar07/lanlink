@@ -64,9 +64,7 @@ def test_light_and_dark_are_taken_literally(qapp) -> None:
     assert theme.apply_theme(qapp, "light") == theme.LIGHT
 
 
-@pytest.mark.parametrize(
-    "value", ["", "  ", "solarized", "Dark Mode", None, 7, "systemm", "LIGHTS"]
-)
+@pytest.mark.parametrize("value", ["", "  ", "solarized", "Dark Mode", None, 7, "systemm", "LIGHTS"])
 def test_an_invalid_theme_falls_back_to_system(value: object) -> None:
     assert theme.normalise(value) == theme.SYSTEM
 

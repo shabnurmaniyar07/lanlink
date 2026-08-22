@@ -12,6 +12,9 @@ in the same release. If it does not match, the file is deleted and said so.
 from __future__ import annotations
 
 import contextlib
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
@@ -26,10 +29,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-import os
-import subprocess
-import sys
-from collections.abc import Callable
 
 from ..updates import (
     ChecksumMismatch,
@@ -43,13 +42,19 @@ from ..updates import (
 
 def launch_installer(installer: VerifiedInstaller) -> None:
     """Start the verified installer and leave it to the user."""
+    from .. import updates
+
     if not isinstance(installer, VerifiedInstaller):
         raise TypeError("Only a verified installer may be launched.")
     path = Path(installer.path)
     if not path.is_file():
         raise FileNotFoundError(f"{path} is no longer there.")
     if sys.platform == "win32":
-        os.startfile(str(path))
+        startfile = getattr(updates.os, "startfile", None) or getattr(os, "startfile", None)
+        if startfile is not None:
+            startfile(str(path))
+        else:
+            subprocess.Popen([str(path)])
     else:
         subprocess.Popen([str(path)])
 
@@ -110,8 +115,7 @@ class DownloadJob(QRunnable):
             self.signals.failed.emit(str(error))
         except Exception as error:  # noqa: BLE001 - shown to the user verbatim
             self.signals.failed.emit(
-                f"The download failed: {error.__class__.__name__}. "
-                "Check the network and try again."
+                f"The download failed: {error.__class__.__name__}. Check the network and try again."
             )
         else:
             self.signals.finished.emit(installer)
@@ -286,8 +290,7 @@ class UpdateDialog(QDialog):
             launch_installer(self.installer)
         except Exception as error:  # noqa: BLE001 - the user is standing right there
             self.status.setText(
-                f"The installer would not start: {error}. "
-                f"You can run it yourself from {self.installer.path}"
+                f"The installer would not start: {error}. You can run it yourself from {self.installer.path}"
             )
             return
         self.installStarting.emit()

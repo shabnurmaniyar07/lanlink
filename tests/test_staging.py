@@ -243,7 +243,9 @@ def test_folder_staging_refuses_to_escape(stager: RemoteFileStager) -> None:
 
     with pytest.raises(StagingError, match="leave the staging folder"):
         stager.stage_folder(
-            folder, files, lambda item, partial: partial.write_bytes(b"x"),
+            folder,
+            files,
+            lambda item, partial: partial.write_bytes(b"x"),
             relative=lambda item: "../../escaped.txt",
         )
 

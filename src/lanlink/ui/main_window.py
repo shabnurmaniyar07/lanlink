@@ -198,9 +198,7 @@ class DestinationDialog(QDialog):
 
     def _shares_ready(self, shares: list[dict]) -> None:
         writable = [
-            share
-            for share in shares
-            if "w" in share.get("permissions", "") and share.get("available")
+            share for share in shares if "w" in share.get("permissions", "") and share.get("available")
         ]
         self.share_box.clear()
         for share in writable:
@@ -1015,8 +1013,9 @@ class MainWindow(QMainWindow):
             self.refresh_my_device()
             self.refresh_devices()
             self.status_line.showMessage(
-                f"Reconnected on {self.service.url}" if ok else
-                f"Could not rebind: {self.service.last_error}",
+                f"Reconnected on {self.service.url}"
+                if ok
+                else f"Could not rebind: {self.service.last_error}",
                 8000,
             )
 
@@ -1344,18 +1343,13 @@ class MainWindow(QMainWindow):
             )
             return
 
-        loses_access = (
-            ", and it can no longer reach this device's shared folders" if device.paired_in else ""
-        )
+        loses_access = ", and it can no longer reach this device's shared folders" if device.paired_in else ""
         detail = (
             f"Remove everything LanLink has saved about {device.name}?\n\n"
             f"Its token and pinned certificate are deleted here{loses_access}. "
             "Pair again to reconnect."
         )
-        if (
-            QMessageBox.question(self, "Forget device", detail)
-            != QMessageBox.StandardButton.Yes
-        ):
+        if QMessageBox.question(self, "Forget device", detail) != QMessageBox.StandardButton.Yes:
             return
 
         self.state.forget_device(device.id)
@@ -1446,9 +1440,7 @@ class MainWindow(QMainWindow):
         self._update_navigation_buttons()
         client = self._client_for(self.current_device)
         share_id = share["share_id"]
-        self.runner.run(
-            lambda: client.list_folder(share_id, path), self._folder_loaded, self._browser_failed
-        )
+        self.runner.run(lambda: client.list_folder(share_id, path), self._folder_loaded, self._browser_failed)
 
     def _folder_loaded(self, entries: list[dict]) -> None:
         self.entry_model.set_entries(entries)
@@ -1902,9 +1894,7 @@ class MainWindow(QMainWindow):
             return
         remotes = [remote for remote in map(self._remote_for, entries) if remote is not None]
         pending = [
-            remote
-            for remote in plan_drag(self.stager, remotes).pending
-            if remote.path not in self._staging
+            remote for remote in plan_drag(self.stager, remotes).pending if remote.path not in self._staging
         ]
         if pending:
             self.stage_entries(pending)
@@ -2015,9 +2005,7 @@ class MainWindow(QMainWindow):
         entry = self._selected_entry()
         if not entry or not self.current_share or self.current_device is None:
             return
-        name, accepted = QInputDialog.getText(
-            self, "Rename", "New name:", text=str(entry.get("name", ""))
-        )
+        name, accepted = QInputDialog.getText(self, "Rename", "New name:", text=str(entry.get("name", "")))
         if not accepted or not name.strip():
             return
         client = self._client_for(self.current_device)
@@ -2037,8 +2025,7 @@ class MainWindow(QMainWindow):
         extra = "" if len(entries) <= 5 else f" and {len(entries) - 5} more"
         folders = [entry for entry in entries if entry.get("kind") == "folder"]
         question = (
-            f"Delete {names}{extra} from {self.current_device.name}?\n\n"
-            "This cannot be undone from LanLink."
+            f"Delete {names}{extra} from {self.current_device.name}?\n\nThis cannot be undone from LanLink."
         )
         if folders:
             question += "\n\nFolders will be deleted with everything inside them."
@@ -2127,9 +2114,7 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def transfer_selection(self, move: bool) -> None:
-        entries = [
-            entry for entry in self._selected_entries() if entry.get("kind") in {"file", "folder"}
-        ]
+        entries = [entry for entry in self._selected_entries() if entry.get("kind") in {"file", "folder"}]
         device, share = self.current_device, self.current_share
         if not entries or not share or device is None:
             self._warn("Nothing selected", "Select one or more files or folders first.")
@@ -2300,9 +2285,13 @@ class MainWindow(QMainWindow):
         if not share_id:
             return
         share = self.state.get_share(share_id)
-        if share and QMessageBox.question(
-            self, "Stop sharing", f"Stop sharing {share.name}? The folder itself is not touched."
-        ) == QMessageBox.StandardButton.Yes:
+        if (
+            share
+            and QMessageBox.question(
+                self, "Stop sharing", f"Stop sharing {share.name}? The folder itself is not touched."
+            )
+            == QMessageBox.StandardButton.Yes
+        ):
             self.state.remove_share(share_id)
             self.refresh_shares()
 
@@ -2426,8 +2415,7 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle(f"LanLink {release.version} is available")
         dialog.setText(body)
         dialog.setInformativeText(
-            f"Download it from:\n{check.link}\n\n"
-            "LanLink will not download or install it for you."
+            f"Download it from:\n{check.link}\n\nLanLink will not download or install it for you."
         )
         copy_button = dialog.addButton("Copy link", QMessageBox.ButtonRole.ActionRole)
         dialog.addButton("Later", QMessageBox.ButtonRole.RejectRole)
@@ -2489,13 +2477,17 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         active = self.transfers.active()
-        if active and QMessageBox.question(
-            self,
-            "Transfers running",
-            f"{len(active)} transfer(s) are still running. Quit and cancel them?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        ) != QMessageBox.StandardButton.Yes:
+        if (
+            active
+            and QMessageBox.question(
+                self,
+                "Transfers running",
+                f"{len(active)} transfer(s) are still running. Quit and cancel them?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
             event.ignore()
             return
 

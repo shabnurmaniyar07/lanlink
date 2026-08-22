@@ -1,4 +1,4 @@
-"""Native OS remote control, screen capture, keyboard injection, and clipboard handlers for LanLink desktop."""
+"""Native OS remote control, screen capture, keyboard and clipboard handlers."""
 
 from __future__ import annotations
 

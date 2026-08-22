@@ -665,9 +665,7 @@ def test_open_uses_the_staged_copy_when_there_is_one(window, monkeypatch) -> Non
     entry = {"name": "part.step", "kind": "file", "path": "part.step", "size": 4}
     window._folder_loaded([entry])
     select_row(window, 0)
-    staged = window.stager.stage_file(
-        window._remote_for(entry), lambda partial: partial.write_bytes(b"data")
-    )
+    staged = window.stager.stage_file(window._remote_for(entry), lambda partial: partial.write_bytes(b"data"))
 
     opened = []
     monkeypatch.setattr(mw, "open_local_file", opened.append)
@@ -682,9 +680,7 @@ def test_copy_local_staged_path_puts_a_windows_path_on_the_clipboard(window) -> 
     entry = {"name": "part.step", "kind": "file", "path": "part.step", "size": 4}
     window._folder_loaded([entry])
     select_row(window, 0)
-    staged = window.stager.stage_file(
-        window._remote_for(entry), lambda partial: partial.write_bytes(b"data")
-    )
+    staged = window.stager.stage_file(window._remote_for(entry), lambda partial: partial.write_bytes(b"data"))
 
     window.copy_staged_paths_to_clipboard()
     assert QApplication.clipboard().text() == str(staged)
@@ -721,8 +717,7 @@ def test_thumbnails_are_only_downloaded_in_an_icon_view(window) -> None:
     queued = []
     window._queue_thumbnail = queued.append
     entries = [
-        {"name": f"shot_{i}.jpg", "kind": "file", "path": f"shot_{i}.jpg", "size": 1000 + i}
-        for i in range(3)
+        {"name": f"shot_{i}.jpg", "kind": "file", "path": f"shot_{i}.jpg", "size": 1000 + i} for i in range(3)
     ]
 
     window.set_view_mode(0)
@@ -770,9 +765,7 @@ def _select_device(window, device) -> None:
 
 
 def test_forget_removes_an_offline_paired_device_from_the_list(window, monkeypatch) -> None:
-    monkeypatch.setattr(
-        mw.QMessageBox, "question", lambda *a, **k: mw.QMessageBox.StandardButton.Yes
-    )
+    monkeypatch.setattr(mw.QMessageBox, "question", lambda *a, **k: mw.QMessageBox.StandardButton.Yes)
     window.state.upsert_remote_device(
         "gone-away-01", "Old Laptop", "https://10.0.0.9:8765", "tok", certificate="pem", fingerprint="ff"
     )
@@ -789,9 +782,7 @@ def test_forget_removes_an_offline_paired_device_from_the_list(window, monkeypat
 
 def test_forget_works_for_a_device_that_only_paired_inwards(window, monkeypatch) -> None:
     """The old guard refused these outright, so they could never be removed."""
-    monkeypatch.setattr(
-        mw.QMessageBox, "question", lambda *a, **k: mw.QMessageBox.StandardButton.Yes
-    )
+    monkeypatch.setattr(mw.QMessageBox, "question", lambda *a, **k: mw.QMessageBox.StandardButton.Yes)
     window.state.approval_callback = None  # no owner sitting in front of a headless test
     code, _ = window.state.start_pairing()
     result = window.state.pair("inbound-only-1", "Their PC", code, source="10.0.0.5")
@@ -815,9 +806,7 @@ def test_forget_leaves_a_merely_discovered_device_alone(window, monkeypatch) -> 
 
 
 def test_forget_closes_the_browser_when_it_was_showing_that_device(window, monkeypatch) -> None:
-    monkeypatch.setattr(
-        mw.QMessageBox, "question", lambda *a, **k: mw.QMessageBox.StandardButton.Yes
-    )
+    monkeypatch.setattr(mw.QMessageBox, "question", lambda *a, **k: mw.QMessageBox.StandardButton.Yes)
     window.state.upsert_remote_device("open-now-01", "Open PC", "https://10.0.0.4:8765", "tok")
     device = mw.UnifiedDevice(id="open-now-01", name="Open PC", paired_out=True)
     window.current_device = device
@@ -1045,6 +1034,8 @@ def test_clearing_the_repository_falls_back_to_the_one_lanlink_ships_from(window
     asked: list[str] = []
     monkeypatch.setattr(mw, "check_for_update", lambda repository, current: asked.append(repository))
     window.runner.wait(1000)
+    for _ in range(50):
+        QApplication.processEvents()
     asked.clear()
     window.update_repo.setText("")
     window.check_for_updates(quiet=True)
@@ -1129,8 +1120,14 @@ def _update_check(version: str = "0.2.0", *, checksums: bool = True):
     return UpdateCheck(
         UpdateStatus.UPDATE_AVAILABLE,
         f"LanLink {version} is available. You are running {mw.__version__}.",
-        Release(Version.parse(version), f"LanLink {version}", "Notes", "https://x/page",
-                "https://x/setup.exe", assets=tuple(assets)),
+        Release(
+            Version.parse(version),
+            f"LanLink {version}",
+            "Notes",
+            "https://x/page",
+            "https://x/setup.exe",
+            assets=tuple(assets),
+        ),
         Version.parse(mw.__version__),
     )
 

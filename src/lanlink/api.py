@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import contextlib
+import os
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -71,6 +73,7 @@ def iter_file_from(path: Any, start: int, end: int | None = None) -> Iterator[by
             if remaining is not None:
                 remaining -= len(block)
             yield block
+
 
 # HTTP status per pairing outcome. Distinct codes let a native client explain itself.
 PAIR_FAILURE_STATUS = {
@@ -254,9 +257,7 @@ def create_app(state: HubState) -> FastAPI:
                         )
                     output.write(block)
         except FileExistsError as error:
-            raise HTTPException(
-                status_code=409, detail="A file with this name already exists."
-            ) from error
+            raise HTTPException(status_code=409, detail="A file with this name already exists.") from error
         except BaseException:
             # Never leave a truncated file behind; it would also block the retry.
             if created:
@@ -439,25 +440,27 @@ def create_app(state: HubState) -> FastAPI:
         # Self-unpair only. Revoking any other device is a local-owner action and
         # is deliberately not reachable over the network.
         if client_id != caller.id:
-            raise HTTPException(
-                status_code=403, detail="A device may only remove its own pairing."
-            )
+            raise HTTPException(status_code=403, detail="A device may only remove its own pairing.")
         return {"revoked": state.revoke(client_id)}
 
     @app.get("/v1/clipboard")
     def get_clipboard(caller: PairedDevice = Depends(require_pairing)) -> dict:
         from .ui.theme import allow_clipboard_sync
+
         if not allow_clipboard_sync():
             return {"text": "", "status": "disabled"}
         from .remote import get_system_clipboard
+
         return {"text": get_system_clipboard()}
 
     @app.post("/v1/clipboard")
     async def post_clipboard(request: Request, caller: PairedDevice = Depends(require_pairing)) -> dict:
         from .ui.theme import allow_clipboard_sync
+
         if not allow_clipboard_sync():
             return {"status": "disabled"}
         from .remote import set_system_clipboard
+
         body = await request.json()
         text = str(body.get("text", ""))
         set_system_clipboard(text)
@@ -474,9 +477,11 @@ def create_app(state: HubState) -> FastAPI:
     @app.post("/v1/remote/mouse")
     async def remote_mouse(request: Request, caller: PairedDevice = Depends(require_pairing)) -> dict:
         from .ui.theme import allow_remote_mouse
+
         if not allow_remote_mouse():
             return {"result": "disabled"}
         from .remote import handle_mouse_event
+
         data = await request.json()
         ok = handle_mouse_event(data)
         return {"result": "ok" if ok else "ignored"}
@@ -484,9 +489,11 @@ def create_app(state: HubState) -> FastAPI:
     @app.post("/v1/remote/keyboard")
     async def remote_keyboard(request: Request, caller: PairedDevice = Depends(require_pairing)) -> dict:
         from .ui.theme import allow_remote_keyboard
+
         if not allow_remote_keyboard():
             return {"result": "disabled"}
         from .remote import handle_keyboard_event
+
         data = await request.json()
         ok = handle_keyboard_event(data)
         return {"result": "ok" if ok else "ignored"}
@@ -494,9 +501,11 @@ def create_app(state: HubState) -> FastAPI:
     @app.post("/v1/remote/media")
     async def remote_media(request: Request, caller: PairedDevice = Depends(require_pairing)) -> dict:
         from .ui.theme import allow_remote_media
+
         if not allow_remote_media():
             return {"result": "disabled"}
         from .remote import handle_media_event
+
         data = await request.json()
         action = str(data.get("action", ""))
         ok = handle_media_event(action)
@@ -509,9 +518,11 @@ def create_app(state: HubState) -> FastAPI:
         caller: PairedDevice = Depends(require_pairing),
     ) -> Response:
         from .ui.theme import allow_screen_mirror
+
         if not allow_screen_mirror():
             raise HTTPException(status_code=403, detail="Screen mirroring is disabled on this host.")
         from .remote import capture_screen_jpeg
+
         frame = capture_screen_jpeg(quality=quality, max_width=width)
         if not frame:
             raise HTTPException(status_code=500, detail="Could not capture desktop screen.")
@@ -523,6 +534,7 @@ def create_app(state: HubState) -> FastAPI:
         caller: PairedDevice = Depends(require_pairing),
     ) -> dict:
         from .ui.theme import allow_camera_backup, saved_camera_backup_path
+
         if not allow_camera_backup():
             raise HTTPException(status_code=403, detail="Camera backup is disabled on this host.")
 

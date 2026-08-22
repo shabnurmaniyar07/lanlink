@@ -296,7 +296,6 @@ class TransferManager:
         self._notify(transfer)
 
 
-
 # --------------------------------------------------------------------- runners
 
 
@@ -387,9 +386,7 @@ def upload_runner(
                     manager.advance(transfer, control, len(block))
                     yield block
 
-        client.put_stream(
-            share_id, folder, source.name, chunks(), offset=resume_from, sha256=digest
-        )
+        client.put_stream(share_id, folder, source.name, chunks(), offset=resume_from, sha256=digest)
 
     return run
 
@@ -507,9 +504,7 @@ def relay_folder_runner(
         target_root = _join(destination_folder, name)
         _ensure_remote_tree(destination_client, destination_share_id, "", [target_root])
         relative_folders = [_relative_to(source_path, folder) for folder in folders]
-        _ensure_remote_tree(
-            destination_client, destination_share_id, target_root, relative_folders
-        )
+        _ensure_remote_tree(destination_client, destination_share_id, target_root, relative_folders)
 
         for entry in files:
             control.resume.wait()
@@ -629,8 +624,6 @@ def upload_folder_runner(
                         manager.advance(transfer, control, len(block))
                         yield block
 
-            client.put_stream(
-                share_id, _join(target_root, parent), filename, chunks(), sha256=digest
-            )
+            client.put_stream(share_id, _join(target_root, parent), filename, chunks(), sha256=digest)
 
     return run

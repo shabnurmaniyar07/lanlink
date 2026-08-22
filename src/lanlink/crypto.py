@@ -115,9 +115,7 @@ def ensure_device_certificate(
                     certificate_path=certificate_path,
                     key_path=key_path,
                     pem=pem,
-                    fingerprint=fingerprint_of_der(
-                        certificate.public_bytes(serialization.Encoding.DER)
-                    ),
+                    fingerprint=fingerprint_of_der(certificate.public_bytes(serialization.Encoding.DER)),
                 )
         except (ValueError, OSError):
             pass  # regenerate below

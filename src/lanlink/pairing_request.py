@@ -26,9 +26,7 @@ import httpx
 PAIRING_WAIT_SECONDS = 120.0
 POLL_INTERVAL_SECONDS = 2.0
 
-TIMED_OUT_MESSAGE = (
-    "Pairing timed out — enable pairing on the other device and try again."
-)
+TIMED_OUT_MESSAGE = "Pairing timed out — enable pairing on the other device and try again."
 
 
 def is_not_armed(error: BaseException) -> bool:

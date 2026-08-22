@@ -543,9 +543,7 @@ def choose_share(shares: list[dict], wanted: str | None) -> dict:
     writable = [s for s in shares if "w" in s["permissions"] and "d" in s["permissions"] and s["available"]]
     if not writable:
         found = ", ".join("{name} ({permissions})".format(**share) for share in shares)
-        raise SystemExit(
-            "The conformance run needs one share with read + write + delete. Found: " + found
-        )
+        raise SystemExit("The conformance run needs one share with read + write + delete. Found: " + found)
     return writable[0]
 
 

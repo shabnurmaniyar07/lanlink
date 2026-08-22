@@ -22,6 +22,7 @@ UPDATE_REPOSITORY_KEY = "updates/repository"
 UPDATE_AT_STARTUP_KEY = "updates/check_at_startup"
 UPDATE_LAST_CHECK_KEY = "updates/last_check"
 UPDATE_LAST_VERSION_KEY = "updates/last_version"
+UPDATE_SKIPPED_KEY = "updates/skipped_version"
 UPDATE_SKIPPED_VERSION_KEY = "updates/skipped_version"
 
 ALLOW_MOUSE_KEY = "remote/allow_mouse"
@@ -293,6 +294,7 @@ def _scheme_name(app: QApplication) -> str:
 
 def saved_update_repository() -> str:
     from ..updates import DEFAULT_REPOSITORY
+
     value = settings().value(UPDATE_REPOSITORY_KEY, "")
     val_str = str(value or "").strip()
     return val_str if val_str else DEFAULT_REPOSITORY

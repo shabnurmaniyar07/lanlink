@@ -109,9 +109,7 @@ def test_failure_is_recorded_and_retryable(manager: TransferManager) -> None:
             raise RuntimeError("network dropped")
         manager.advance(transfer, control, 10)
 
-    transfer = manager.submit(
-        kind="test", filename="a.bin", source="A", destination="B", runner=run, size=10
-    )
+    transfer = manager.submit(kind="test", filename="a.bin", source="A", destination="B", runner=run, size=10)
     wait_for(transfer, {TransferStatus.FAILED})
     assert transfer.error == "network dropped"
     assert transfer in manager.history()
@@ -182,9 +180,7 @@ def test_history_separates_finished_transfers(manager: TransferManager) -> None:
     assert manager.snapshot() == []
 
 
-def test_download_and_upload_against_a_real_node(
-    manager: TransferManager, tmp_path: Path
-) -> None:
+def test_download_and_upload_against_a_real_node(manager: TransferManager, tmp_path: Path) -> None:
     state, root, share_id = build_node(tmp_path, "alpha")
     payload = b"lanlink" * 20_000  # ~140 KB, several chunks
     (root / "source.bin").write_bytes(payload)

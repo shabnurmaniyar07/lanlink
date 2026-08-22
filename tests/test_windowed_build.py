@@ -31,9 +31,7 @@ def without_stdout(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(sys, "stderr", None)
 
 
-def test_the_service_starts_when_there_is_no_stdout(
-    tmp_path: Path, without_stdout: None
-) -> None:
+def test_the_service_starts_when_there_is_no_stdout(tmp_path: Path, without_stdout: None) -> None:
     state = HubState(tmp_path / "settings.json")
     state.use_tls = False  # a certificate is not what is under test here
     service = LocalService(state, port=8971, host="127.0.0.1")

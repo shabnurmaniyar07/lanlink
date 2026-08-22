@@ -117,9 +117,7 @@ def test_settings_file_is_owner_only(state: HubState) -> None:
     assert mode == 0o600, f"settings must not be group/world readable, got {oct(mode)}"
 
 
-def test_device_cannot_revoke_another_device(
-    client: TestClient, state: HubState, pair_device
-) -> None:
+def test_device_cannot_revoke_another_device(client: TestClient, state: HubState, pair_device) -> None:
     token_a = pair_device("client-aaaaaaaa", "A")
     token_b = pair_device("client-bbbbbbbb", "B")
 
