@@ -193,6 +193,6 @@ def capture_screen_jpeg(quality: int = 55, max_width: int = 1280) -> bytes:
         buf = QBuffer()
         buf.open(QIODevice.OpenModeFlag.WriteOnly)
         pixmap.save(buf, "JPEG", quality)
-        return bytes(buf.data())
+        return buf.data().data()
     except Exception:
         return b""

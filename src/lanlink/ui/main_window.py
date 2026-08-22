@@ -402,6 +402,7 @@ class MainWindow(QMainWindow):
 
         self.bridge.changed.connect(self.refresh_transfers)
         self.refresh_all()
+        self.startup_timer: QTimer | None = None
         self._start_timers()
 
         self._update_link = ""
@@ -2311,7 +2312,7 @@ class MainWindow(QMainWindow):
         but must not open a dialog. Somebody who opened LanLink to move a file
         does not want a modal about versions.
         """
-        if getattr(self, "startup_timer", None) is not None:
+        if self.startup_timer is not None:
             self.startup_timer.stop()
         if getattr(self, "_checking_updates", False):
             return
@@ -2491,7 +2492,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
 
-        if getattr(self, "startup_timer", None) is not None:
+        if self.startup_timer is not None:
             self.startup_timer.stop()
         self.fast_timer.stop()
         self.slow_timer.stop()
